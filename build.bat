@@ -9,7 +9,7 @@ if not exist ".venv\Scripts\python.exe" (
 .venv\Scripts\python.exe -m pip install --disable-pip-version-check -q pyinstaller
 if errorlevel 1 exit /b 1
 
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed ^
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin ^
     --name MaplePQAutoclicker main.py
 if errorlevel 1 exit /b 1
 

@@ -1,7 +1,8 @@
 # Maple PQ Autoclicker
 
-A small always-on-top window for MapleStory party quests. It spams your
-**interact** key and a **left click** on one spot, fast, until you stop it.
+A small always-on-top window for MapleStory party quests. It repeats
+**interact key → left click on one spot → interact key → pause**, fast,
+until you stop it.
 
 You set up:
 
@@ -17,7 +18,8 @@ You set up:
 
 Grab **`MaplePQAutoclicker.exe`** from the
 [latest release](https://github.com/tleytek/maple-pq-autoclicker/releases/latest)
-and double-click it. Nothing else to install.
+and double-click it. Nothing else to install. Windows asks to run it as
+administrator: click **Yes** (see below for why).
 
 Windows SmartScreen may say "Windows protected your PC" because the exe isn't
 code-signed. Click **More info → Run anyway**.
@@ -28,7 +30,8 @@ code-signed. Click **More info → Run anyway**.
    In the installer, tick **"Add python.exe to PATH"**.
 2. Download this repo (green **Code** button → **Download ZIP**, then unzip),
    or `git clone` it.
-3. Double-click **`run.bat`**. No packages to install.
+3. Double-click **`run.bat`** and click **Yes** when Windows asks for
+   administrator. No packages to install.
 
 To build the exe yourself, run **`build.bat`**. It writes
 `dist\MaplePQAutoclicker.exe`.
@@ -48,8 +51,18 @@ says how many pixels differ). After it stops on a change, it won't start
 again until the region matches the snapshot again. The snapshot is kept
 between runs; take a new one whenever you want a different screen.
 
-Each cycle taps the interact key, then left-clicks the spot. The mouse is
-moved to the spot for every click, so you can't use it while it runs.
+Each sequence is: tap the interact key, left-click the spot, tap the
+interact key, then pause. The mouse is moved to the spot for every click, so
+you can't use it while it runs.
+
+### Why administrator?
+
+MapleStory runs as administrator, and Windows silently ignores keys and
+clicks that normal programs send to an administrator program. So the app
+has to run as administrator too: the exe asks every time it opens, and
+`run.bat` starts it that way. If it's ever started without admin while an
+admin MapleStory is open, Start refuses and says so instead of clicking into
+nothing.
 
 | Control | Action |
 |---|---|
@@ -58,17 +71,17 @@ moved to the spot for every click, so you can't use it while it runs.
 | Select Region | Pick the part of the screen to watch (drag a box; Esc cancels) |
 | Take Snapshot | Save what the region must look like for clicking to run |
 | F1 / Start | Start / stop |
-| F3 / Slower | Longer interval (×1.5) |
-| F4 / Faster | Shorter interval (÷1.5, down to 10 ms) |
+| F3 / Slower | Longer pause (×1.5) |
+| F4 / Faster | Shorter pause (÷1.5, down to 10 ms) |
 | Always on top | Keep the window above the game |
 | Show log | Show what happened, with times |
 
 Tips:
 
-- The interval is the time from one key + click to the next. Default 50 ms
-  (20 per second). Change it while running.
-- If the game ignores it, close the app and start it again with right-click →
-  **Run as administrator** (needed when the game itself runs as admin).
+- The pause is the wait after each sequence. Default 50 ms. Each key press
+  and click is held 15 ms with 15 ms between steps (so the game sees two
+  separate interact presses), which makes about 8 sequences per second.
+  Change the pause while running; the **Pause** row shows sequences/sec.
 - It won't start if the click spot or the watch region is on its own window.
 - The region is compared pixel by pixel with the snapshot (no text reading,
   so the game's small font isn't a problem). It matches when fewer than 10
