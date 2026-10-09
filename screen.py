@@ -169,21 +169,41 @@ class Capturer:
         self.close()
 
 
-def changed_pixels(a, b):
-    """Number of pixels whose colour differs between two same-size frames.
+# Colour tolerance. Each channel is bucketed in steps of 16 on two grids
+# offset by 8; a pixel only counts as changed when it lands in a different
+# bucket on both grids. So a channel shift under 8 (of 255) is always
+# ignored, 16+ is always counted, 8-15 depends on the exact values. That
+# ignores faint shading (e.g. a window shadow that darkens when its window
+# has focus) while text appearing or changing is far above it.
+_GRID_A = bytes(v >> 4 for v in range(256))
+_GRID_B = bytes((v + 8) >> 4 for v in range(256))
+_NONZERO = bytes([0]) + bytes([1]) * 255
 
-    Done with big-integer XOR/OR so it runs at C speed (well under 1 ms for a
-    typical dialog-sized region) instead of a Python loop per pixel.
+
+def _changed_bytes(a, b, grid, n):
+    """One flag per channel byte: 1 where that channel changed bucket on this grid."""
+    qa = int.from_bytes(a.translate(grid), "little")
+    qb = int.from_bytes(b.translate(grid), "little")
+    return int.from_bytes((qa ^ qb).to_bytes(n, "little").translate(_NONZERO), "little")
+
+
+def changed_pixels(a, b):
+    """Number of pixels whose colour clearly differs between two frames
+    (faint shifts under 8/255 per channel are ignored, see above).
+
+    Done with byte tables and big-integer XOR/AND so it runs at C speed
+    (about a millisecond for a dialog-sized region), not a loop per pixel.
     """
     if a.bgra == b.bgra:
         return 0
     if (a.width, a.height) != (b.width, b.height):
         return a.width * a.height
     n = len(a.bgra)
-    diff = (int.from_bytes(a.bgra, "little") ^ int.from_bytes(b.bgra, "little")).to_bytes(n, "little")
-    # OR the B, G and R differences together; alpha is ignored.
-    any_ch = (int.from_bytes(diff[0::4], "little") | int.from_bytes(diff[1::4], "little")
-              | int.from_bytes(diff[2::4], "little"))
+    # per channel: changed on both grids; then per pixel: any of B, G, R
+    both = (_changed_bytes(a.bgra, b.bgra, _GRID_A, n)
+            & _changed_bytes(a.bgra, b.bgra, _GRID_B, n)).to_bytes(n, "little")
+    any_ch = (int.from_bytes(both[0::4], "little") | int.from_bytes(both[1::4], "little")
+              | int.from_bytes(both[2::4], "little"))  # alpha is ignored
     return (n // 4) - any_ch.to_bytes(n // 4, "little").count(0)
 
 

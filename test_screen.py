@@ -27,25 +27,61 @@ def paint(frame, x, y, rgb):
 def test_changed_pixels_counts_pixels_not_bytes():
     a = solid(50, 20, (10, 20, 30))
     assert s.changed_pixels(a, a) == 0
-    b = paint(a, 0, 0, (11, 20, 30))         # one channel of one pixel
+    b = paint(a, 0, 0, (60, 20, 30))         # one channel of one pixel
     b = paint(b, 49, 19, (255, 255, 255))    # all channels of the last pixel
-    b = paint(b, 7, 3, (10, 21, 30))
+    b = paint(b, 7, 3, (10, 70, 30))
     assert s.changed_pixels(a, b) == 3, s.changed_pixels(a, b)
     assert s.changed_pixels(b, a) == 3
     # alpha differences are ignored
     assert s.changed_pixels(a, solid(50, 20, (10, 20, 30), alpha=0)) == 0
-    assert s.changed_pixels(a, solid(50, 20, (0, 0, 0))) == 1000
+    assert s.changed_pixels(a, solid(50, 20, (100, 120, 130))) == 1000
     assert s.changed_pixels(a, solid(10, 10, (10, 20, 30))) == 1000  # size change
+
+
+def test_faint_shading_is_ignored_but_real_changes_count():
+    """Every pair of channel values: shifts under 8 never count, 16+ always do."""
+    for v in range(256):
+        a = solid(1, 1, (v, 0, 0))
+        for d in range(-20, 21):
+            w = v + d
+            if not 0 <= w <= 255:
+                continue
+            got = s.changed_pixels(a, solid(1, 1, (w, 0, 0)))
+            if abs(d) < 8:
+                assert got == 0, (v, w)
+            elif abs(d) >= 16:
+                assert got == 1, (v, w)
+    # the real case: a window shadow darkening a 26 px strip by up to 5 levels
+    base = solid(423, 84, (150, 180, 200))
+    buf = bytearray(base.bgra)
+    for y in range(84):
+        for x in range(397, 423):
+            i = (y * 423 + x) * 4
+            for c in range(3):
+                buf[i + c] -= 1 + (x - 397) % 5
+    shaded = s.Frame(423, 84, bytes(buf))
+    assert s.changed_pixels(base, shaded) == 0
+    # ...while white text drawn on it still counts
+    assert s.changed_pixels(base, changed_text(base)) == 100
+
+
+def changed_text(frame):
+    """Paint a 10x10 white block (stand-in for new text) into a frame."""
+    for y in range(10):
+        for x in range(10):
+            frame = paint(frame, 20 + x, 20 + y, (255, 255, 255))
+    return frame
 
 
 def test_changed_pixels_is_fast():
     a = solid(600, 200, (1, 2, 3))
-    b = paint(a, 300, 100, (9, 9, 9))
+    b = paint(a, 300, 100, (99, 99, 99))
     t = time.perf_counter()
     for _ in range(100):
         assert s.changed_pixels(a, b) == 1
     per = (time.perf_counter() - t) / 100
-    assert per < 0.005, f"{per * 1000:.2f} ms per diff"
+    # two bucket grids per compare; still small next to a ~4 ms capture
+    assert per < 0.010, f"{per * 1000:.2f} ms per diff"
 
 
 def test_blank_and_ppm():
