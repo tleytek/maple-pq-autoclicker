@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import clicker
+import screen
 
 APP_NAME = "Maple PQ Autoclicker"
 # Settings live in %APPDATA% so the app works the same from source or as a
@@ -41,6 +42,8 @@ def load_settings(path=None):
         if (isinstance(pos, list) and len(pos) == 2
                 and all(isinstance(v, int) for v in pos)):
             settings["click"] = pos
+        if screen.region_is_valid(data.get("region")):
+            settings["region"] = {k: data["region"][k] for k in ("left", "top", "width", "height")}
         for key, lo, hi in (("gap", clicker.MIN_GAP, clicker.MAX_GAP), ("hold", 0.001, 0.5)):
             v = data.get(key)
             if isinstance(v, (int, float)) and lo <= v <= hi:
@@ -57,6 +60,90 @@ def save_settings(settings, path=None):
 
 def fmt_speed(gap):
     return f"{gap * 1000:.0f} ms  ({1 / gap:.1f} / sec)"
+
+
+def fmt_region(r):
+    return f"{r['width']}×{r['height']} at ({r['left']}, {r['top']})"
+
+
+def frame_photo(frame, max_w=300):
+    """Tk image of a captured frame, zoomed up if tiny / shrunk if wide."""
+    img = tk.PhotoImage(data=frame.ppm(), format="PPM")
+    if frame.width * 2 <= max_w:
+        return img.zoom(2)
+    if frame.width > max_w:
+        return img.subsample(-(-frame.width // max_w))
+    return img
+
+
+# --------------------------------------------------------------------------- #
+# Region selector (drag a box over a frozen screenshot)
+# --------------------------------------------------------------------------- #
+def select_region(master, on_done):
+    """Open a fullscreen drag-to-select overlay. Calls on_done(region_or_None)."""
+    virtual = screen.virtual_screen()
+    with screen.Capturer() as cap:
+        shot = cap.grab(virtual)
+
+    top = tk.Toplevel(master)
+    top.overrideredirect(True)
+    top.attributes("-topmost", True)
+    top.geometry(f"{virtual['width']}x{virtual['height']}+{virtual['left']}+{virtual['top']}")
+
+    canvas = tk.Canvas(top, highlightthickness=0, cursor="crosshair")
+    canvas.pack(fill=tk.BOTH, expand=True)
+    photo = tk.PhotoImage(data=shot.ppm(), format="PPM")
+    canvas.photo = photo  # keep a reference
+    canvas.create_image(0, 0, image=photo, anchor="nw")
+    hint = canvas.create_text(
+        virtual["width"] // 2, 40,
+        text="Drag a box around the text to watch  —  Esc / right-click to cancel",
+        fill="yellow", font=("Consolas", 20, "bold"),
+    )
+    state = {"start": None, "rect": None, "done": False}
+
+    def finish(region):
+        if state["done"]:
+            return
+        state["done"] = True
+        top.destroy()
+        on_done(region)
+
+    def on_press(e):
+        state["start"] = (e.x, e.y)
+        if state["rect"]:
+            canvas.delete(state["rect"])
+        state["rect"] = canvas.create_rectangle(e.x, e.y, e.x, e.y, outline="red", width=2)
+
+    def on_drag(e):
+        if state["start"]:
+            x0, y0 = state["start"]
+            canvas.coords(state["rect"], x0, y0, e.x, e.y)
+
+    def on_release(e):
+        if not state["start"]:
+            return
+        x0, y0 = state["start"]
+        region = {
+            "left": min(x0, e.x) + virtual["left"],
+            "top": min(y0, e.y) + virtual["top"],
+            "width": abs(e.x - x0),
+            "height": abs(e.y - y0),
+        }
+        state["start"] = None
+        if screen.region_is_valid(region):
+            finish(region)
+        else:
+            canvas.itemconfig(hint, text="Box too small — drag again (Esc to cancel)")
+
+    canvas.bind("<ButtonPress-1>", on_press)
+    canvas.bind("<B1-Motion>", on_drag)
+    canvas.bind("<ButtonRelease-1>", on_release)
+    canvas.bind("<ButtonPress-3>", lambda e: finish(None))
+    top.bind("<Escape>", lambda e: finish(None))
+    top.focus_force()
+    top.grab_set()
+    return top
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +168,8 @@ class App:
         self.events = queue.Queue()  # hotkey thread -> UI thread
         self.capturing_key = False
         self.running = True
+        self.capturer = screen.Capturer()  # UI-thread capture for the preview
+        self.preview_photo = None
 
         self._build_ui()
         self.hotkeys = clicker.HotkeyPoller(lambda vk: self.events.put(vk)).start()
@@ -110,6 +199,7 @@ class App:
             ("state", "State"),
             ("interact", "Interact key"),
             ("click", "Click spot"),
+            ("region", "Watch region"),
             ("speed", "Interval"),
             ("cycles", "Cycles"),
         ]
@@ -132,12 +222,27 @@ class App:
         self.start_btn = ttk.Button(btns, text="Start", command=self.toggle)
         self.start_btn.pack(side=tk.LEFT, padx=4)
 
+        region_btns = tk.Frame(self.root, bg=self.BG)
+        region_btns.pack(fill=tk.X, pady=(0, 4), **pad)
+        ttk.Button(region_btns, text="Select Region", command=self.select_region
+                   ).pack(side=tk.LEFT)
+        ttk.Button(region_btns, text="Clear Region", command=self.clear_region
+                   ).pack(side=tk.LEFT, padx=4)
+
         speed = tk.Frame(self.root, bg=self.BG)
         speed.pack(fill=tk.X, pady=(0, 8), **pad)
         ttk.Button(speed, text="Slower", command=lambda: self.change_speed(clicker.slower)
                    ).pack(side=tk.LEFT)
         ttk.Button(speed, text="Faster", command=lambda: self.change_speed(clicker.faster)
                    ).pack(side=tk.LEFT, padx=4)
+
+        prev_frame = tk.Frame(self.root, bg=self.BG)
+        prev_frame.pack(fill=tk.X, pady=(0, 6), **pad)
+        tk.Label(prev_frame, text="Watching:", bg=self.BG, fg=self.DIM,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, anchor="n")
+        self.preview = tk.Label(prev_frame, bg="black", text="(no region)",
+                                fg=self.DIM, font=("Segoe UI", 9))
+        self.preview.pack(side=tk.LEFT, padx=6)
 
         opts = tk.Frame(self.root, bg=self.BG)
         opts.pack(fill=tk.X, **pad)
@@ -206,6 +311,8 @@ class App:
         self.vars["click"].set(f"({s['click'][0]}, {s['click'][1]})" if s["click"]
                                else "not set — F2")
         self.value_labels["click"].config(fg=self.FG if s["click"] else self.WARN)
+        self.vars["region"].set(fmt_region(s["region"]) if s.get("region")
+                                else "not set (optional)")
         self.vars["speed"].set(fmt_speed(s["gap"]))
         self.vars["cycles"].set(f"{self.spammer.cycles:,}")
         self.start_btn.config(text="Stop" if running else "Start")
@@ -252,6 +359,44 @@ class App:
         save_settings(self.settings)
         self.set_status(f"Click spot set to ({x}, {y}).")
         self._refresh()
+
+    def select_region(self):
+        self.root.withdraw()
+        # give the window time to disappear before the screenshot is taken
+        self.root.after(250, lambda: select_region(self.root, self._region_chosen))
+
+    def _region_chosen(self, region):
+        self.root.deiconify()
+        self._apply_on_top()
+        if region:
+            self.settings["region"] = region
+            save_settings(self.settings)
+            self.set_status(f"Watch region set: {fmt_region(region)}.")
+        else:
+            self.set_status("Region selection cancelled.")
+        self._refresh()
+        self._update_preview()
+
+    def clear_region(self):
+        self.settings.pop("region", None)
+        save_settings(self.settings)
+        self.set_status("Watch region cleared: clicking won't stop on its own.")
+        self._refresh()
+        self._update_preview()
+
+    def _update_preview(self, frame=None):
+        region = self.settings.get("region")
+        if not region:
+            self.preview_photo = None
+            self.preview.config(image="", text="(no region)")
+            return
+        try:
+            frame = frame or self.capturer.grab(region)
+        except OSError as e:
+            self.preview.config(image="", text=f"(can't capture: {e})")
+            return
+        self.preview_photo = frame_photo(frame)
+        self.preview.config(image=self.preview_photo, text="")
 
     def _spot_on_window(self):
         x, y = self.settings["click"]
@@ -302,6 +447,7 @@ class App:
         self.spammer.stop()
         for after_id in self._afters.values():
             self.root.after_cancel(after_id)
+        self.capturer.close()
         self.root.destroy()
 
     # ---- event loop ------------------------------------------------------ #
@@ -326,6 +472,8 @@ class App:
         if not self.running:
             return
         self._refresh()
+        if self.root.state() != "withdrawn":
+            self._update_preview()
         self._afters["tick"] = self.root.after(250, self._tick)
 
     def run(self):

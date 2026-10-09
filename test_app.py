@@ -3,6 +3,7 @@
 Uses a temporary settings file and a fake SendInput, so nothing is pressed
 or clicked and your saved settings are untouched.
 """
+import gc
 import json
 import os
 import tempfile
@@ -17,6 +18,9 @@ TMP = tempfile.mkdtemp()
 
 
 def make_app(settings=None):
+    # Several Tk roots in one process: free old Tk objects here, on the main
+    # thread, before a background thread's GC pass can (Tcl crashes on that).
+    gc.collect()
     main.SETTINGS_FILE = os.path.join(TMP, f"settings_{time.perf_counter_ns()}.json")
     if settings is not None:
         with open(main.SETTINGS_FILE, "w") as f:
@@ -53,7 +57,11 @@ def test_load_settings_rejects_bad_values():
     with open(path, "w") as f:
         f.write("not json")
     assert main.load_settings(path) == clicker.DEFAULT_SETTINGS
-    good = {"interact_vk": 0x20, "click": [5, 6], "gap": 0.03, "hold": 0.01}
+    with open(path, "w") as f:
+        json.dump({"region": {"left": 1, "top": 2, "width": 3, "height": 50}}, f)
+    assert "region" not in main.load_settings(path)  # too small
+    good = {"interact_vk": 0x20, "click": [5, 6], "gap": 0.03, "hold": 0.01,
+            "region": {"left": -100, "top": 2, "width": 300, "height": 50}}
     with open(path, "w") as f:
         json.dump(good, f)
     assert main.load_settings(path) == good
@@ -156,10 +164,71 @@ def test_recording_key_stops_spamming():
         app.quit()
 
 
+def test_region_select_save_preview_and_clear():
+    app = make_app()
+    try:
+        assert app.vars["region"].get() == "not set (optional)"
+        assert app.preview.cget("text") == "(no region)"
+        region = {"left": 10, "top": 20, "width": 120, "height": 30}
+        app._region_chosen(region)
+        assert app.settings["region"] == region and saved()["region"] == region
+        assert app.vars["region"].get() == "120×30 at (10, 20)"
+        assert app.preview_photo is not None
+        assert app.preview_photo.width() == 240  # small crops are shown at 2x
+        app._region_chosen(None)  # cancel keeps the old one
+        assert app.settings["region"] == region
+        app.clear_region()
+        assert "region" not in app.settings and "region" not in saved()
+        assert app.preview.cget("text") == "(no region)"
+    finally:
+        app.quit()
+
+
+def test_region_overlay_drag_returns_screen_coords():
+    app = make_app()
+    got = []
+    try:
+        top = main.select_region(app.root, got.append)
+        pump(app, 0.3)
+        canvas = top.winfo_children()[0]
+        v = main.screen.virtual_screen()
+        canvas.event_generate("<ButtonPress-1>", x=100, y=50)
+        canvas.event_generate("<B1-Motion>", x=150, y=60)
+        canvas.event_generate("<ButtonRelease-1>", x=103, y=52)  # too small: ignored
+        pump(app, 0.05)
+        assert got == []
+        canvas.event_generate("<ButtonPress-1>", x=300, y=200)
+        canvas.event_generate("<ButtonRelease-1>", x=100, y=150)  # dragged up-left
+        pump(app, 0.05)
+        assert got == [{"left": 100 + v["left"], "top": 150 + v["top"],
+                        "width": 200, "height": 50}], got
+        top2 = main.select_region(app.root, got.append)
+        pump(app, 0.2)
+        top2.event_generate("<Escape>")
+        pump(app, 0.05)
+        assert got[-1] is None
+    finally:
+        app.quit()
+
+
+def test_frame_photo_scaling():
+    app = make_app()
+    try:
+        small = main.screen.Frame(100, 10, bytes(4000))
+        assert main.frame_photo(small).width() == 200
+        mid = main.screen.Frame(200, 10, bytes(8000))
+        assert main.frame_photo(mid).width() == 200
+        wide = main.screen.Frame(900, 10, bytes(36000))
+        assert main.frame_photo(wide).width() == 300
+    finally:
+        app.quit()
+
+
 if __name__ == "__main__":
     clicker.set_dpi_aware()
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     for name, fn in tests:
         fn()
+        gc.collect()
         print("ok  ", name)
     print(f"{len(tests)} tests passed")
