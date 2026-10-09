@@ -14,14 +14,15 @@ VK_F1, VK_F2, VK_F3, VK_F4 = 0x70, 0x71, 0x72, 0x73
 VK_ESCAPE = 0x1B
 HOTKEYS = {VK_F1: "F1", VK_F2: "F2", VK_F3: "F3", VK_F4: "F4"}
 
-MIN_GAP = 0.01   # fastest allowed: 10 ms from one cycle to the next
+MIN_GAP = 0.01   # shortest pause allowed between sequences: 10 ms
 MAX_GAP = 2.0
 SPEED_STEP = 1.5  # F3 / F4 change the interval by this factor
 DEFAULT_SETTINGS = {
     "interact_vk": None,   # virtual-key code of the interact key
     "click": None,         # [x, y] screen pixel to left-click
-    "gap": 0.05,           # seconds from one key+click cycle to the next
-    "hold": 0.015,         # seconds each key / button is held down
+    "gap": 0.05,           # pause after each interact/click/interact sequence
+    "hold": 0.015,         # seconds each key / button is held down, and the
+                           # gap between steps (so the game sees separate presses)
 }
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
@@ -166,10 +167,15 @@ def slower(gap):
 # --------------------------------------------------------------------------- #
 # Spammer
 # --------------------------------------------------------------------------- #
+# One cycle: these steps in order, then a pause of settings["gap"].
+SEQUENCE = ("interact", "click", "interact")
+
+
 class Spammer:
-    """Background thread: tap the interact key, then left-click the saved
-    spot, every `gap` seconds until stopped. Reads `settings` every cycle, so
-    speed / position changes apply while it runs."""
+    """Background thread: repeats SEQUENCE (interact key, left click on the
+    saved spot, interact key), pausing `gap` seconds after each one, until
+    stopped. Reads `settings` every cycle, so pause / position changes apply
+    while it runs."""
 
     def __init__(self, settings, send_fn=None):
         self.settings = settings
@@ -198,26 +204,37 @@ class Spammer:
     def _release(self, vk):
         self.send(key_input(vk, False), button_input(False))
 
+    def _step(self, step, s):
+        """Press and release one step. False if stopped during the hold."""
+        if step == "interact":
+            vk = s["interact_vk"]
+            self.send(key_input(vk, True))
+            ok = wait_until(time.perf_counter() + s["hold"], self.stop_event)
+            if ok:
+                self.send(key_input(vk, False))
+        else:
+            x, y = s["click"]
+            self.send(move_input(x, y), button_input(True))  # move + press, atomic
+            ok = wait_until(time.perf_counter() + s["hold"], self.stop_event)
+            if ok:
+                self.send(button_input(False))
+        return ok
+
     def _run(self):
         vk = self.settings["interact_vk"]
-        nxt = time.perf_counter()
         try:
             while not self.stop_event.is_set():
                 s = self.settings
                 vk = s["interact_vk"]
-                hold = min(s["hold"], s["gap"] / 2)
-                x, y = s["click"]
-                self.send(key_input(vk, True))
-                if not wait_until(time.perf_counter() + hold, self.stop_event):
+                for i, step in enumerate(SEQUENCE):
+                    if i and not wait_until(time.perf_counter() + s["hold"], self.stop_event):
+                        break  # short gap between steps
+                    if not self._step(step, s):
+                        break
+                if self.stop_event.is_set():
                     break
-                self.send(key_input(vk, False))
-                self.send(move_input(x, y), button_input(True))  # move + press, atomic
-                if not wait_until(time.perf_counter() + hold, self.stop_event):
-                    break
-                self.send(button_input(False))
                 self.cycles += 1
-                nxt = max(nxt + s["gap"], time.perf_counter())
-                if not wait_until(nxt, self.stop_event):
+                if not wait_until(time.perf_counter() + s["gap"], self.stop_event):
                     break
         finally:
             self._release(vk)  # never leave the key or button held down

@@ -67,7 +67,10 @@ def test_speed_steps_are_clamped():
     assert g == c.MAX_GAP
 
 
-def test_spammer_cycle_order_and_timing():
+KEY_DOWN, KEY_UP = [("key", 0x20, "down")], [("key", 0x20, "up")]
+
+
+def test_spammer_sequence_is_interact_click_interact_pause():
     fake = FakeSend()
     s = dict(clicker_settings, gap=0.04, hold=0.01)
     sp = c.Spammer(s, send_fn=fake)
@@ -76,22 +79,30 @@ def test_spammer_cycle_order_and_timing():
     sp.stop()
     assert not sp.running
     batches = [b for _, b in fake.log]
-    # one cycle: key down / key up / move+left down / left up
-    first = batches[:4]
-    assert first[0] == [("key", 0x20, "down")], first
-    assert first[1] == [("key", 0x20, "up")], first
+    # one cycle: interact (down/up), click (move+down/up), interact (down/up)
+    first = batches[:6]
+    assert first[0] == KEY_DOWN and first[1] == KEY_UP, first
     assert first[2][0][0] == "move" and first[2][1] == ("left", "down"), first
     assert first[3] == [("left", "up")], first
+    assert first[4] == KEY_DOWN and first[5] == KEY_UP, first
     move = first[2][0]
     assert (move[1], move[2]) == c.to_abs(100, 200)
-    # cycle starts (key downs) are `gap` apart
-    downs = [t for t, b in fake.log if b == [("key", 0x20, "down")]]
-    assert 10 <= len(downs) <= 14, len(downs)
-    gaps = [b - a for a, b in zip(downs, downs[1:])]
-    assert all(abs(g - 0.04) < 0.004 for g in gaps), gaps
+    # the pattern repeats exactly
+    full = (len(batches) - 1) // 6 * 6
+    for i in range(0, full, 6):
+        assert [b[-1] for b in batches[i:i + 6]] == [b[-1] for b in first], i
+    # within a sequence: each press is held `hold`, with a `hold` gap between
+    # steps, so the second interact press is clearly separate from the first
+    times = [t for t, _ in fake.log]
+    for i in range(0, 5):
+        assert abs(times[i + 1] - times[i] - 0.01) < 0.004, (i, times[i + 1] - times[i])
+    # ...then the pause: last key up -> next sequence's first key down
+    pauses = [times[i + 6] - times[i + 5] for i in range(0, full - 6, 6)]
+    assert pauses and all(abs(p - 0.04) < 0.004 for p in pauses), pauses
+    # sequences are 5 holds + pause apart: 0.09 s -> ~5-6 in 0.5 s
+    assert 5 <= sp.cycles <= 6, sp.cycles
     # always ends with key + button released
     assert batches[-1] == [("key", 0x20, "up"), ("left", "up")], batches[-1]
-    assert sp.cycles >= 10
 
 
 def test_spammer_picks_up_live_changes():
@@ -107,19 +118,10 @@ def test_spammer_picks_up_live_changes():
     sp.stop()
     moves = [b[0] for t, b in fake.log if t > mark + 0.07 and b[0][0] == "move"]
     assert moves and all(m[1:] == c.to_abs(300, 400) for m in moves)
-    downs = [t for t, b in fake.log if t > mark + 0.07 and b == [("key", 0x20, "down")]]
-    gaps = [b - a for a, b in zip(downs, downs[1:])]
-    assert gaps and all(abs(g - 0.06) < 0.005 for g in gaps), gaps
-
-
-def test_hold_never_exceeds_half_the_gap():
-    fake = FakeSend()
-    s = dict(clicker_settings, gap=0.02, hold=0.5)
-    sp = c.Spammer(s, send_fn=fake)
-    sp.start()
-    time.sleep(0.3)
-    sp.stop()
-    assert sp.cycles >= 10, sp.cycles
+    # clicks are 5 holds + pause apart
+    starts = [t for t, b in fake.log if t > mark + 0.1 and b[0][0] == "move"]
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert gaps and all(abs(g - 0.085) < 0.006 for g in gaps), gaps
 
 
 def test_stop_mid_hold_releases():

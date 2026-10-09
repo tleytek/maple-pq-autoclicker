@@ -293,7 +293,7 @@ def test_change_stops_clicking_fast_and_blocks_restart():
         app.start()
         pump(app, 0.4)
         assert app.spammer.running, app.status.get()  # unchanged: keeps going
-        assert app.spammer.cycles >= 10
+        assert app.spammer.cycles >= 5  # ~45 ms per sequence (5 x 5 ms + 20 ms pause)
         item = canvas.create_text(70, 20, text="Next", fill="white")
         top.update()
         took = wait_stopped(app)
