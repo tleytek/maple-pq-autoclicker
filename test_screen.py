@@ -3,6 +3,8 @@
 The live test opens a small topmost window with known colours, captures it
 and checks the pixels, so it needs a visible desktop.
 """
+import os
+import tempfile
 import time
 import tkinter as tk
 
@@ -101,6 +103,32 @@ def test_live_capture_reads_and_detects_change():
             assert per < 0.03
     finally:
         root.destroy()
+
+
+def test_save_and_load_frame_round_trip():
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "sub", "snap.ppm")
+    a = paint(paint(solid(30, 7, (1, 2, 3), alpha=0), 5, 5, (250, 0, 9)), 29, 6, (9, 9, 9))
+    s.save_frame(a, path)
+    b = s.load_frame(path)
+    assert (b.width, b.height) == (30, 7)
+    assert s.changed_pixels(a, b) == 0  # alpha isn't stored; colours are exact
+    assert b.ppm() == a.ppm()
+    assert s.load_frame(os.path.join(d, "missing.ppm")) is None
+    with open(path, "wb") as f:
+        f.write(a.ppm()[:-5])  # truncated
+    assert s.load_frame(path) is None
+    with open(path, "wb") as f:
+        f.write(b"garbage")
+    assert s.load_frame(path) is None
+
+
+def test_matches_uses_the_change_threshold():
+    a = solid(50, 20, (10, 20, 30))
+    assert s.matches(a, a)
+    assert s.matches(changed(s.CHANGE_PIXELS - 1), a)
+    assert not s.matches(changed(s.CHANGE_PIXELS), a)
+    assert not s.matches(solid(10, 10, (10, 20, 30)), a)  # different size
 
 
 class FakeCapturer:

@@ -5,6 +5,8 @@ dependency) and measures how much of it changed compared with a snapshot.
 """
 import ctypes
 import ctypes.wintypes as wt
+import os
+import re
 import threading
 import time
 
@@ -83,6 +85,36 @@ class Frame:
         return all(self.bgra[c::4].count(self.bgra[c]) == n for c in range(3))
 
 
+def save_frame(frame, path):
+    """Save as a .ppm image (opens in most image viewers, e.g. GIMP/IrfanView)."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(frame.ppm())
+    os.replace(tmp, path)
+
+
+def load_frame(path):
+    """Load a .ppm saved by save_frame. Returns None if missing or damaged."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", data)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    rgb = data[m.end():]
+    if w < 1 or h < 1 or len(rgb) != w * h * 3:
+        return None
+    bgra = bytearray(b"\xff" * (w * h * 4))
+    bgra[0::4] = rgb[2::3]
+    bgra[1::4] = rgb[1::3]
+    bgra[2::4] = rgb[0::3]
+    return Frame(w, h, bytes(bgra))
+
+
 class Capturer:
     """Reusable GDI capture. Create one per thread."""
 
@@ -153,6 +185,11 @@ def changed_pixels(a, b):
     any_ch = (int.from_bytes(diff[0::4], "little") | int.from_bytes(diff[1::4], "little")
               | int.from_bytes(diff[2::4], "little"))
     return (n // 4) - any_ch.to_bytes(n // 4, "little").count(0)
+
+
+def matches(frame, snapshot, change_pixels=CHANGE_PIXELS):
+    """True when the frame looks like the snapshot (fewer than change_pixels differ)."""
+    return changed_pixels(frame, snapshot) < change_pixels
 
 
 class Watcher:
