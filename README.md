@@ -3,14 +3,15 @@
 A small always-on-top window for MapleStory party quests. It spams your
 **interact** key and a **left click** on one spot, fast, until you stop it.
 
-You set two things:
+You set up:
 
 - **Interact key**: the key you use to talk / pick up / interact in game.
 - **Click spot**: where on the screen to left-click.
-
-Optionally, a **watch region**: some text on screen. When you start, the app
-takes a snapshot of it, and stops clicking as soon as it looks different
-(typically within a few hundredths of a second).
+- **Watch region + snapshot**: a part of the screen (e.g. the NPC's text)
+  and a saved picture of what it should look like. Clicking only starts
+  while the region matches the snapshot, and stops as soon as it doesn't
+  (within a few hundredths of a second). Pressing start on the wrong screen
+  does nothing.
 
 ## Download (easiest)
 
@@ -36,9 +37,16 @@ To build the exe yourself, run **`build.bat`**. It writes
 
 1. Click **Record Interact**, then press your interact key (Esc cancels).
 2. Put the mouse where you want it to click and press **F2**.
-3. Optional: click **Select Region** and drag a box around the text that
-   should stop the clicking when it changes. Check the **Watching** preview.
-4. Switch to the game and press **F1** to start. Press **F1** again to stop.
+3. Click **Select Region** and drag a box around the text to watch.
+4. With the game on the screen where clicking should run, click
+   **Take Snapshot**. The **Snapshot** and **Now** previews show the saved
+   picture and the live region; **Region now** says whether they match.
+5. Switch to the game and press **F1** to start. Press **F1** again to stop.
+
+If the region doesn't match the snapshot, F1 does nothing (the status line
+says how many pixels differ). After it stops on a change, it won't start
+again until the region matches the snapshot again. The snapshot is kept
+between runs; take a new one whenever you want a different screen.
 
 Each cycle taps the interact key, then left-clicks the spot. The mouse is
 moved to the spot for every click, so you can't use it while it runs.
@@ -47,8 +55,8 @@ moved to the spot for every click, so you can't use it while it runs.
 |---|---|
 | Record Interact | Set the interact key (press it after clicking the button) |
 | F2 | Set the click spot to where the mouse is now |
-| Select Region | Pick the text to watch (drag a box; Esc cancels) |
-| Clear Region | Stop watching; clicking only stops with F1 |
+| Select Region | Pick the part of the screen to watch (drag a box; Esc cancels) |
+| Take Snapshot | Save what the region must look like for clicking to run |
 | F1 / Start | Start / stop |
 | F3 / Slower | Longer interval (×1.5) |
 | F4 / Faster | Shorter interval (÷1.5, down to 10 ms) |
@@ -62,17 +70,19 @@ Tips:
 - If the game ignores it, close the app and start it again with right-click →
   **Run as administrator** (needed when the game itself runs as admin).
 - It won't start if the click spot or the watch region is on its own window.
-- The region is compared pixel by pixel with the snapshot taken when you
-  pressed start (no text reading, so the game's small font isn't a
-  problem). It stops when at least 10 pixels differ in 2 captures in a row,
-  so a single flicker doesn't count. Each start takes a fresh snapshot.
+- The region is compared pixel by pixel with the snapshot (no text reading,
+  so the game's small font isn't a problem). It matches when fewer than 10
+  pixels differ. While running, it stops when 10+ pixels differ in 2
+  captures in a row, so a single flicker doesn't count.
+- Selecting a new region throws the old snapshot away.
 - Keep the region tight around the text. Anything moving inside it (your
   character, mobs, animated backgrounds) also counts as a change.
 - If the click spot is inside the region and clicking changes it (e.g. a
   button lights up), it stops right away.
 - The game has to be in windowed or borderless mode: in exclusive fullscreen
   the capture is black and changes aren't seen.
-- Settings are saved in `%APPDATA%\MaplePQAutoclicker`.
+- Settings and the snapshot (`snapshot.ppm`) are saved in
+  `%APPDATA%\MaplePQAutoclicker`.
 - Automating input may be against the game's rules. Use at your own risk.
 
 ## Tests
