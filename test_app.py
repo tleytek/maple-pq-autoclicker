@@ -356,11 +356,29 @@ def test_refuses_region_over_its_own_window():
                   "width": 50, "height": 20}
         app._region_chosen(region)
         app.take_snapshot()
-        assert app.snapshot is None and "overlaps this window" in app.status.get()
+        assert app.snapshot is None and "overlaps or touches this window" in app.status.get()
         app.snapshot = screen.Frame(50, 20, bytes(4000))  # e.g. window moved after
         app.start()
         assert not app.spammer.running
-        assert "overlaps this window" in app.status.get()
+        assert "overlaps or touches this window" in app.status.get()
+    finally:
+        app.quit()
+
+
+def test_region_just_beside_the_window_counts_as_overlap():
+    app = make_app({"interact_vk": 0x20, "click": FAR})
+    try:
+        pump(app, 0.1)
+        x1 = app.root.winfo_rootx() + app.root.winfo_width()
+        y = app.root.winfo_rooty() + 10
+        near = {"left": x1 + 5, "top": y, "width": 50, "height": 20}  # in the shadow
+        app._region_chosen(near)
+        app.take_snapshot()
+        assert app.snapshot is None and "touches this window" in app.status.get()
+        clear = dict(near, left=x1 + main.SHADOW_MARGIN + 5)
+        app._region_chosen(clear)
+        app.take_snapshot()
+        assert app.snapshot is not None, app.status.get()
     finally:
         app.quit()
 

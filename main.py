@@ -28,6 +28,8 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 SNAPSHOT_FILE = os.path.join(DATA_DIR, "snapshot.ppm")
 
 
+SHADOW_MARGIN = 20  # px around this window kept clear of the watch region
+
 ADMIN_HINT = ("Can't start: MapleStory runs as administrator, so Windows blocks this "
               "app's keys and clicks. Close this app and run it as administrator "
               "(right-click → Run as administrator).")
@@ -471,8 +473,9 @@ class App:
             return
         self.stop()
         if self._region_on_window():
-            self.set_status("Can't take a snapshot: the region overlaps this window. "
-                            "Move the window or select the region again.")
+            self.set_status("Can't take a snapshot: the region overlaps or touches this "
+                            "window (its shadow changes shade). Move the window away "
+                            "or select the region again.")
             return
         try:
             frame = self.capturer.grab(region)
@@ -520,10 +523,13 @@ class App:
         return x0 <= x < x1 and y0 <= y < y1
 
     def _region_on_window(self):
+        """Region overlaps this window or its drop shadow (which changes
+        shade when focus moves between this window and the game)."""
         g = self.settings["region"]
         x0, y0, x1, y1 = self._window_box()
-        return (g["left"] < x1 and x0 < g["left"] + g["width"]
-                and g["top"] < y1 and y0 < g["top"] + g["height"])
+        m = SHADOW_MARGIN
+        return (g["left"] < x1 + m and x0 - m < g["left"] + g["width"]
+                and g["top"] < y1 + m and y0 - m < g["top"] + g["height"])
 
     def _spot_in_region(self):
         x, y = self.settings["click"]
@@ -555,8 +561,9 @@ class App:
             return
         region = self.settings["region"]
         if self._region_on_window():
-            self.set_status("Can't start: the watch region overlaps this window. "
-                            "Move the window or select the region again.")
+            self.set_status("Can't start: the watch region overlaps or touches this "
+                            "window (its shadow changes shade). Move the window away "
+                            "or select the region again.")
             return
         try:
             now = self.capturer.grab(region)
