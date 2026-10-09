@@ -103,6 +103,96 @@ def test_live_capture_reads_and_detects_change():
         root.destroy()
 
 
+class FakeCapturer:
+    """Plays back a list of frames, repeating the last one."""
+    def __init__(self, frames, delay=0.0):
+        self.frames, self.delay, self.grabs = list(frames), delay, 0
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def grab(self, region):
+        time.sleep(self.delay)
+        self.grabs += 1
+        return self.frames.pop(0) if len(self.frames) > 1 else self.frames[0]
+
+
+REGION = {"left": 0, "top": 0, "width": 50, "height": 20}
+
+
+def run_watcher(frames, timeout=1.0, **kw):
+    base = frames[0]
+    got = []
+    w = s.Watcher(REGION, base, lambda f, info: got.append((f, info)),
+                  capturer=FakeCapturer(frames), interval=0, **kw).start()
+    w.thread.join(timeout)
+    w.stop()
+    return w, got
+
+
+def changed(n, base=None):
+    f = base or solid(50, 20, (10, 20, 30))
+    for i in range(n):
+        f = paint(f, i % 50, i // 50, (255, 255, 255))
+    return f
+
+
+def test_watcher_ignores_small_noise_and_single_frame_flicker():
+    base = solid(50, 20, (10, 20, 30))
+    frames = [base, changed(5), base, changed(40), base] + [changed(3)] * 50
+    w, got = run_watcher(frames, timeout=0.3)
+    assert got == [] and not w.fired, got
+    assert w.checks > 50
+
+
+def test_watcher_fires_on_a_real_change():
+    base = solid(50, 20, (10, 20, 30))
+    new = changed(40)
+    w, got = run_watcher([base, base, base, new, new, new])
+    assert w.fired and len(got) == 1, got
+    frame, n = got[0]
+    assert frame is new and n == 40
+    assert not w.running
+
+
+def test_watcher_reacts_within_a_couple_of_frames():
+    base = solid(50, 20, (10, 20, 30))
+    cap = FakeCapturer([base] * 20 + [changed(40)], delay=0.004)
+    got = []
+    w = s.Watcher(REGION, base, lambda f, info: got.append(time.perf_counter()),
+                  capturer=cap).start()
+    w.thread.join(2)
+    assert got and cap.grabs == 22, cap.grabs  # fired on the 2nd changed frame
+
+
+def test_watcher_reports_capture_errors():
+    class Broken(FakeCapturer):
+        def grab(self, region):
+            raise OSError("boom")
+    got = []
+    w = s.Watcher(REGION, solid(50, 20, (0, 0, 0)), lambda f, info: got.append((f, info)),
+                  capturer=Broken([None])).start()
+    w.thread.join(1)
+    assert got and got[0][0] is None and "boom" in got[0][1], got
+
+
+def test_watcher_stop_is_silent():
+    base = solid(50, 20, (10, 20, 30))
+    got = []
+    w = s.Watcher(REGION, base, lambda f, info: got.append(info),
+                  capturer=FakeCapturer([base])).start()
+    time.sleep(0.05)
+    w.stop()
+    w.thread.join(1)
+    assert not w.running and got == [] and not w.fired
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     for name, fn in tests:

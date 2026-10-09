@@ -5,6 +5,8 @@ dependency) and measures how much of it changed compared with a snapshot.
 """
 import ctypes
 import ctypes.wintypes as wt
+import threading
+import time
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -13,6 +15,9 @@ SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
 BI_RGB = 0
 MIN_REGION_SIZE = 5  # pixels
+CHANGE_PIXELS = 10   # this many pixels must differ from the snapshot...
+CONFIRM_FRAMES = 2   # ...in this many frames in a row (ignores 1-frame flicker)
+WATCH_INTERVAL = 0.003  # pause between captures (each capture takes a few ms)
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -148,3 +153,59 @@ def changed_pixels(a, b):
     any_ch = (int.from_bytes(diff[0::4], "little") | int.from_bytes(diff[1::4], "little")
               | int.from_bytes(diff[2::4], "little"))
     return (n // 4) - any_ch.to_bytes(n // 4, "little").count(0)
+
+
+class Watcher:
+    """Background thread: compares the region with `baseline` over and over
+    and calls on_change(frame, changed) once it differs (or on_change(None, msg)
+    if capturing fails, so the clicker never runs unwatched). Stops after
+    firing once."""
+
+    def __init__(self, region, baseline, on_change, change_pixels=CHANGE_PIXELS,
+                 confirm=CONFIRM_FRAMES, interval=WATCH_INTERVAL, capturer=Capturer):
+        self.region = dict(region)
+        self.baseline = baseline
+        self.on_change = on_change
+        self.change_pixels = change_pixels
+        self.confirm = confirm
+        self.interval = interval
+        self.capturer = capturer
+        self.stop_event = threading.Event()
+        self.latest = baseline  # most recent frame, for the preview
+        self.checks = 0
+        self.fired = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def stop(self):
+        self.stop_event.set()
+
+    @property
+    def running(self):
+        return self.thread.is_alive()
+
+    def _fire(self, frame, info):
+        self.fired = True
+        self.stop_event.set()
+        self.on_change(frame, info)
+
+    def _run(self):
+        hits = 0
+        try:
+            with self.capturer() as cap:
+                while not self.stop_event.is_set():
+                    frame = cap.grab(self.region)
+                    self.latest = frame
+                    self.checks += 1
+                    n = changed_pixels(frame, self.baseline)
+                    hits = hits + 1 if n >= self.change_pixels else 0
+                    if hits >= self.confirm:
+                        self._fire(frame, n)
+                        return
+                    self.stop_event.wait(self.interval)
+        except Exception as e:  # can't see the region: stop rather than click blind
+            if not self.stop_event.is_set():
+                self._fire(None, f"screen capture failed: {e}")
