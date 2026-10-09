@@ -4,7 +4,9 @@ Spams your in-game "interact" key and a left click at a saved spot, fast.
 
 1. Record Interact (button): press the key you use to interact in game.
 2. F2: saves the mouse position as the spot to left-click.
-3. F1: start / stop.   F3 slower, F4 faster.
+3. Select Region (optional): text to watch. Clicking stops as soon as it
+   changes from what it showed when you pressed start.
+4. F1: start / stop.   F3 slower, F4 faster.
 """
 import json
 import os
@@ -170,9 +172,11 @@ class App:
         self.running = True
         self.capturer = screen.Capturer()  # UI-thread capture for the preview
         self.preview_photo = None
+        self.watcher = None
+        self.stop_reason = None  # shown in the State row after an auto-stop
 
         self._build_ui()
-        self.hotkeys = clicker.HotkeyPoller(lambda vk: self.events.put(vk)).start()
+        self.hotkeys = clicker.HotkeyPoller(lambda vk: self.events.put(("key", vk))).start()
         self._refresh()
         self._afters = {"poll": self.root.after(50, self._poll),
                         "tick": self.root.after(250, self._tick)}
@@ -299,8 +303,13 @@ class App:
     def _refresh(self):
         s = self.settings
         running = self.spammer.running
-        self.vars["state"].set("RUNNING" if running else "Stopped")
-        self.value_labels["state"].config(fg=self.ACCENT if running else self.FG)
+        if running:
+            self.vars["state"].set("RUNNING" + (" · watching" if self.watcher else ""))
+        else:
+            self.vars["state"].set(f"Stopped ({self.stop_reason})" if self.stop_reason
+                                   else "Stopped")
+        self.value_labels["state"].config(
+            fg=self.ACCENT if running else self.WARN if self.stop_reason else self.FG)
         if self.capturing_key:
             self.vars["interact"].set("press a key…")
         else:
@@ -398,11 +407,32 @@ class App:
         self.preview_photo = frame_photo(frame)
         self.preview.config(image=self.preview_photo, text="")
 
+    def _window_box(self):
+        r = self.root
+        return (r.winfo_rootx(), r.winfo_rooty(),
+                r.winfo_rootx() + r.winfo_width(), r.winfo_rooty() + r.winfo_height())
+
     def _spot_on_window(self):
         x, y = self.settings["click"]
-        r = self.root
-        return (r.winfo_rootx() <= x < r.winfo_rootx() + r.winfo_width()
-                and r.winfo_rooty() <= y < r.winfo_rooty() + r.winfo_height())
+        x0, y0, x1, y1 = self._window_box()
+        return x0 <= x < x1 and y0 <= y < y1
+
+    def _region_on_window(self):
+        g = self.settings["region"]
+        x0, y0, x1, y1 = self._window_box()
+        return (g["left"] < x1 and x0 < g["left"] + g["width"]
+                and g["top"] < y1 and y0 < g["top"] + g["height"])
+
+    def _spot_in_region(self):
+        x, y = self.settings["click"]
+        g = self.settings["region"]
+        return (g["left"] <= x < g["left"] + g["width"]
+                and g["top"] <= y < g["top"] + g["height"])
+
+    def _on_region_change(self, frame, info):
+        """Watcher thread: stop clicking right now, tell the UI after."""
+        self.spammer.stop_event.set()
+        self.events.put(("changed", frame, info))
 
     def start(self):
         if self.spammer.running:
@@ -418,18 +448,64 @@ class App:
             self.set_status("Can't start: the click spot is on this window. "
                             "Move the window or set the spot again with F2.")
             return
-        self.spammer.start()
+        region = self.settings.get("region")
+        baseline = None
+        if region:
+            if self._region_on_window():
+                self.set_status("Can't start: the watch region overlaps this window. "
+                                "Move the window or select the region again.")
+                return
+            try:
+                baseline = self.capturer.grab(region)  # what the text looks like now
+            except OSError as e:
+                self.set_status(f"Can't start: {e}.")
+                return
+        self.stop_reason = None
+        self.watcher = None
+        self.spammer.start()  # before the watcher, so an instant change still stops it
+        if region:
+            self.watcher = screen.Watcher(region, baseline, self._on_region_change).start()
+            self._update_preview(baseline)
         s = self.settings
         self.set_status(f"Running: {clicker.key_name(s['interact_vk'])} + left click at "
-                        f"({s['click'][0]}, {s['click'][1]}) every {s['gap'] * 1000:.0f} ms. "
-                        "F1 to stop.")
+                        f"({s['click'][0]}, {s['click'][1]}) every {s['gap'] * 1000:.0f} ms"
+                        + (", stops when the watched region changes" if region else "")
+                        + ". F1 to stop.")
+        if region and baseline.is_blank():
+            self.log("Note: the watched region is one solid colour. If the game is in "
+                     "exclusive fullscreen, captures may be black; use windowed mode.")
+        if region and self._spot_in_region():
+            self.log("Note: the click spot is inside the watched region, so if a click "
+                     "changes it, clicking stops right away.")
         self._refresh()
+
+    def _stop_watcher(self):
+        if self.watcher:
+            self.watcher.stop()
+            self.watcher = None
 
     def stop(self):
         if not self.spammer.running:
+            self._stop_watcher()
             return
+        self._stop_watcher()
         self.spammer.stop()
         self.set_status(f"Stopped after {self.spammer.cycles:,} cycles.")
+        self._refresh()
+
+    def _region_changed(self, frame, info):
+        watcher, self.watcher = self.watcher, None
+        self.spammer.stop()
+        if frame is None:
+            self.stop_reason = "can't see region"
+            self.set_status(f"Stopped: {info}. Clicking stops when the region can't be checked.")
+        else:
+            self.stop_reason = "region changed"
+            self.set_status(f"Stopped: the watched region changed ({info:,} pixels) "
+                            f"after {self.spammer.cycles:,} cycles.")
+            self._update_preview(frame)
+        if watcher:
+            self.log(f"Checked the region {watcher.checks:,} times.")
         self._refresh()
 
     def toggle(self):
@@ -444,6 +520,7 @@ class App:
     def quit(self):
         self.running = False
         self.hotkeys.stop()
+        self._stop_watcher()
         self.spammer.stop()
         for after_id in self._afters.values():
             self.root.after_cancel(after_id)
@@ -454,7 +531,11 @@ class App:
     def _poll(self):
         try:
             while True:
-                vk = self.events.get_nowait()
+                event = self.events.get_nowait()
+                if event[0] == "changed":
+                    self._region_changed(event[1], event[2])
+                    continue
+                vk = event[1]
                 if vk == clicker.VK_F1:
                     self.toggle()
                 elif vk == clicker.VK_F2:
@@ -473,7 +554,8 @@ class App:
             return
         self._refresh()
         if self.root.state() != "withdrawn":
-            self._update_preview()
+            # while watching, show the watcher's latest frame instead of capturing again
+            self._update_preview(self.watcher.latest if self.watcher else None)
         self._afters["tick"] = self.root.after(250, self._tick)
 
     def run(self):
