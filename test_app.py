@@ -1,7 +1,8 @@
 """Tests for the window logic in main.py. Run: python test_app.py
 
-Uses a temporary settings file and a fake SendInput, so nothing is pressed
-or clicked and your saved settings are untouched.
+Uses a temporary settings/snapshot file and a fake SendInput, so nothing is
+pressed or clicked and your saved settings are untouched. The watch-region
+tests open a small window on screen and use it as the region.
 """
 import gc
 import json
@@ -13,25 +14,40 @@ import types
 
 import clicker
 import main
+import screen
 from test_clicker import FakeSend
 
 TMP = tempfile.mkdtemp()
+FAR = [-99999, -99999]  # click spot that's never on the app window (input is fake)
 
 
 def make_app(settings=None):
     # Several Tk roots in one process: free old Tk objects here, on the main
     # thread, before a background thread's GC pass can (Tcl crashes on that).
     gc.collect()
-    main.SETTINGS_FILE = os.path.join(TMP, f"settings_{time.perf_counter_ns()}.json")
+    stamp = time.perf_counter_ns()
+    main.SETTINGS_FILE = os.path.join(TMP, f"settings_{stamp}.json")
+    main.SNAPSHOT_FILE = os.path.join(TMP, f"snapshot_{stamp}.ppm")
     if settings is not None:
         with open(main.SETTINGS_FILE, "w") as f:
             json.dump(settings, f)
+    return _open()
+
+
+def _open():
     app = main.App()
     app.fake = FakeSend()
     app.spammer.send = app.fake
     app.hotkeys.stop()  # don't react to real F-keys during tests
     app.root.update()
     return app
+
+
+def reopen(app):
+    """Close and start the app again with the same settings/snapshot files."""
+    app.quit()
+    gc.collect()
+    return _open()
 
 
 def pump(app, seconds=0.0):
@@ -48,6 +64,39 @@ def saved():
         return json.load(f)
 
 
+def watched_target(app, color="#203040"):
+    """A small topmost window away from the app, used as the watched region."""
+    app.root.geometry("+40+40")
+    top = tk.Toplevel(app.root)
+    top.overrideredirect(True)
+    top.attributes("-topmost", True)
+    top.geometry("160x60+900+300")
+    canvas = tk.Canvas(top, width=160, height=60, highlightthickness=0, bg=color)
+    canvas.pack()
+    pump(app, 0.4)
+    region = {"left": top.winfo_rootx() + 10, "top": top.winfo_rooty() + 10,
+              "width": 140, "height": 40}
+    return top, canvas, region
+
+
+def ready_app(gap=0.02):
+    """Key, click spot, region and snapshot all set: ready to start."""
+    app = make_app({"interact_vk": 0x20, "click": FAR, "gap": gap, "hold": 0.005})
+    top, canvas, region = watched_target(app)
+    app._region_chosen(region)
+    app.take_snapshot()
+    assert app.snapshot is not None, app.status.get()
+    return app, top, canvas
+
+
+def wait_stopped(app, limit=1.0):
+    t0 = time.perf_counter()
+    while app.spammer.running and time.perf_counter() - t0 < limit:
+        time.sleep(0.001)
+    return time.perf_counter() - t0
+
+
+# --------------------------------------------------------------------------- #
 def test_load_settings_rejects_bad_values():
     path = os.path.join(TMP, "bad.json")
     with open(path, "w") as f:
@@ -68,11 +117,23 @@ def test_load_settings_rejects_bad_values():
     assert main.load_settings(path) == good
 
 
+def test_load_snapshot_must_fit_the_region():
+    main.SNAPSHOT_FILE = os.path.join(TMP, "fit.ppm")
+    screen.save_frame(screen.Frame(20, 10, bytes(800)), main.SNAPSHOT_FILE)
+    assert main.load_snapshot({"left": 0, "top": 0, "width": 20, "height": 10}) is not None
+    assert main.load_snapshot({"left": 0, "top": 0, "width": 21, "height": 10}) is None
+    assert main.load_snapshot(None) is None
+
+
 def test_fresh_start_asks_for_setup_and_refuses_to_run():
     app = make_app()
     try:
-        assert "Record Interact" in app.status.get()
+        status = app.status.get()
+        for step in ("Record Interact", "F2", "Select Region"):
+            assert step in status, status
         assert app.vars["interact"].get() == "not set"
+        assert app.vars["region"].get() == "not set"
+        assert app.vars["snapshot"].get() == "not taken"
         app.start()
         assert not app.spammer.running
         assert "Can't start" in app.status.get()
@@ -100,25 +161,15 @@ def test_record_interact_key():
         app.quit()
 
 
-def test_f2_sets_click_spot_and_f1_toggles():
-    app = make_app({"interact_vk": 0x5A, "gap": 0.02, "hold": 0.005})
+def test_f2_sets_click_spot():
+    app = make_app()
     orig = clicker.get_pos
     try:
-        far = (app.root.winfo_rootx() + app.root.winfo_width() + 50, 567)
-        clicker.get_pos = lambda: far
+        clicker.get_pos = lambda: (1234, 567)
         app.events.put(("key", clicker.VK_F2))
         pump(app, 0.1)
-        assert app.settings["click"] == list(far), app.settings
-        assert saved()["click"] == list(far)
-        app.events.put(("key", clicker.VK_F1))
-        pump(app, 0.3)
-        assert app.spammer.running and app.vars["state"].get() == "RUNNING"
-        app.events.put(("key", clicker.VK_F1))
-        pump(app, 0.1)
-        assert not app.spammer.running and app.vars["state"].get() == "Stopped"
-        keys = [b for _, b in app.fake.log if b == [("key", 0x5A, "down")]]
-        assert len(keys) >= 8, len(keys)
-        assert "Stopped after" in app.status.get()
+        assert app.settings["click"] == [1234, 567], app.settings
+        assert saved()["click"] == [1234, 567]
     finally:
         clicker.get_pos = orig
         app.quit()
@@ -136,51 +187,6 @@ def test_speed_hotkeys_save():
         pump(app, 0.1)
         assert app.settings["gap"] == clicker.slower(clicker.slower(clicker.faster(g)))
         assert saved()["gap"] == app.settings["gap"]
-    finally:
-        app.quit()
-
-
-def test_refuses_click_spot_on_its_own_window():
-    app = make_app({"interact_vk": 0x20})
-    try:
-        pump(app, 0.1)
-        app.settings["click"] = [app.root.winfo_rootx() + 5, app.root.winfo_rooty() + 5]
-        app.start()
-        assert not app.spammer.running
-        assert "on this window" in app.status.get()
-    finally:
-        app.quit()
-
-
-def test_recording_key_stops_spamming():
-    app = make_app({"interact_vk": 0x20, "click": [-99999, -99999]})
-    try:
-        app.start()
-        assert app.spammer.running
-        app.record_interact()
-        assert not app.spammer.running and app.capturing_key
-        app.start()
-        assert not app.spammer.running
-    finally:
-        app.quit()
-
-
-def test_region_select_save_preview_and_clear():
-    app = make_app()
-    try:
-        assert app.vars["region"].get() == "not set (optional)"
-        assert app.preview.cget("text") == "(no region)"
-        region = {"left": 10, "top": 20, "width": 120, "height": 30}
-        app._region_chosen(region)
-        assert app.settings["region"] == region and saved()["region"] == region
-        assert app.vars["region"].get() == "120×30 at (10, 20)"
-        assert app.preview_photo is not None
-        assert app.preview_photo.width() == 240  # small crops are shown at 2x
-        app._region_chosen(None)  # cancel keeps the old one
-        assert app.settings["region"] == region
-        app.clear_region()
-        assert "region" not in app.settings and "region" not in saved()
-        assert app.preview.cget("text") == "(no region)"
     finally:
         app.quit()
 
@@ -225,75 +231,131 @@ def test_frame_photo_scaling():
         app.quit()
 
 
-def watched_target(app, color="#203040"):
-    """A small topmost window away from the app, used as the watched region."""
-    app.root.geometry("+40+40")
-    top = tk.Toplevel(app.root)
-    top.overrideredirect(True)
-    top.attributes("-topmost", True)
-    top.geometry("160x60+900+300")
-    canvas = tk.Canvas(top, width=160, height=60, highlightthickness=0, bg=color)
-    canvas.pack()
-    pump(app, 0.4)
-    region = {"left": top.winfo_rootx() + 10, "top": top.winfo_rooty() + 10,
-              "width": 140, "height": 40}
-    return top, canvas, region
-
-
-def test_change_in_watched_region_stops_clicking_fast():
-    app = make_app({"interact_vk": 0x20, "click": [-99999, -99999], "gap": 0.02,
-                    "hold": 0.005})
+def test_snapshot_is_saved_shown_and_survives_a_restart():
+    app = make_app({"interact_vk": 0x20, "click": FAR})
     try:
+        app.take_snapshot()
+        assert app.snapshot is None and "Select Region first" in app.status.get()
         top, canvas, region = watched_target(app)
-        app.settings["region"] = region
-        app.start()
-        assert app.spammer.running and app.watcher is not None
+        app._region_chosen(region)
+        assert app.vars["region"].get() == f"140×40 at ({region['left']}, {region['top']})"
+        assert "Take Snapshot" in app.status.get()
+        app.take_snapshot()
+        assert app.snapshot is not None and os.path.exists(main.SNAPSHOT_FILE)
+        assert app.vars["snapshot"].get() == "saved"
+        assert app.snapshot_photo.width() == 280  # small crops shown at 2x
         pump(app, 0.4)
-        assert app.spammer.running, app.status.get()  # unchanged: keeps going
-        assert app.vars["state"].get() == "RUNNING · watching"
-        cycles_before = app.spammer.cycles
-        assert cycles_before >= 10
-        canvas.create_text(70, 30, text="Next", fill="white")  # the "text" changes
-        top.update()
-        t0 = time.perf_counter()
-        while app.spammer.running and time.perf_counter() - t0 < 1:
-            time.sleep(0.001)
-        took = time.perf_counter() - t0
-        print(f"     stopped {took * 1000:.0f} ms after the change")
-        assert not app.spammer.running and took < 0.15, took
-        pump(app, 0.2)
-        assert app.watcher is None
-        assert app.vars["state"].get() == "Stopped (region changed)"
-        assert "watched region changed" in app.status.get(), app.status.get()
-        assert app.fake.log[-1][1] == [("key", 0x20, "up"), ("left", "up")]
-        # starting again takes a new snapshot (the changed text is the new normal)
+        assert app.vars["match"].get() == "matches snapshot"
+        canvas.create_text(70, 20, text="Changed", fill="white")
+        pump(app, 0.4)
+        assert app.vars["match"].get().startswith("different ("), app.vars["match"].get()
+        app = reopen(app)
+        assert app.snapshot is not None and app.vars["snapshot"].get() == "saved"
+        assert app.snapshot_photo is not None
+        # choosing a new region throws the old snapshot away
+        app._region_chosen(dict(region, width=100))
+        assert app.snapshot is None and not os.path.exists(main.SNAPSHOT_FILE)
+        assert app.vars["snapshot"].get() == "not taken"
         app.start()
-        pump(app, 0.3)
+        assert not app.spammer.running and "Take Snapshot" in app.status.get()
+        # (the target window closed with the first app instance)
+    finally:
+        app.quit()
+
+
+def test_wont_start_unless_region_matches_snapshot():
+    app, top, canvas = ready_app()
+    try:
+        item = canvas.create_text(70, 20, text="Wrong screen", fill="white")
+        pump(app, 0.1)
+        app.events.put(("key", clicker.VK_F1))  # F1 pressed on the wrong screen
+        pump(app, 0.2)
+        assert not app.spammer.running
+        assert "doesn't match the snapshot" in app.status.get(), app.status.get()
+        assert app.fake.log == []  # not a single key or click was sent
+        canvas.delete(item)  # back on the right screen
+        pump(app, 0.1)
+        app.events.put(("key", clicker.VK_F1))
+        pump(app, 0.2)
         assert app.spammer.running, app.status.get()
-        app.stop()
-        assert app.watcher is None and not app.spammer.running
+        assert app.vars["state"].get() == "RUNNING · watching"
+        app.events.put(("key", clicker.VK_F1))
+        pump(app, 0.1)
+        assert not app.spammer.running and app.watcher is None
         top.destroy()
     finally:
         app.quit()
 
 
-def test_no_region_means_no_watching():
-    app = make_app({"interact_vk": 0x20, "click": [-99999, -99999]})
+def test_change_stops_clicking_fast_and_blocks_restart():
+    app, top, canvas = ready_app()
     try:
         app.start()
-        assert app.spammer.running and app.watcher is None
-        assert app.vars["state"].get() == "RUNNING"
+        pump(app, 0.4)
+        assert app.spammer.running, app.status.get()  # unchanged: keeps going
+        assert app.spammer.cycles >= 10
+        item = canvas.create_text(70, 20, text="Next", fill="white")
+        top.update()
+        took = wait_stopped(app)
+        print(f"     stopped {took * 1000:.0f} ms after the change")
+        assert not app.spammer.running and took < 0.15, took
+        pump(app, 0.2)
+        assert app.watcher is None
+        assert app.vars["state"].get() == "Stopped (region changed)"
+        assert "no longer matches the snapshot" in app.status.get(), app.status.get()
+        assert app.fake.log[-1][1] == [("key", 0x20, "up"), ("left", "up")]
+        # still on the changed screen: start is refused (the snapshot is kept)
+        sent = len(app.fake.log)
+        app.start()
+        assert not app.spammer.running and len(app.fake.log) == sent
+        # back to the snapshot screen: runs again
+        canvas.delete(item)
+        top.update()
+        pump(app, 0.1)
+        app.start()
+        assert app.spammer.running, app.status.get()
         app.stop()
+        top.destroy()
+    finally:
+        app.quit()
+
+
+def test_recording_key_stops_spamming():
+    app, top, canvas = ready_app()
+    try:
+        app.start()
+        assert app.spammer.running
+        app.record_interact()
+        assert not app.spammer.running and app.capturing_key and app.watcher is None
+        app.start()
+        assert not app.spammer.running
+        top.destroy()
+    finally:
+        app.quit()
+
+
+def test_refuses_click_spot_on_its_own_window():
+    app, top, canvas = ready_app()
+    try:
+        app.settings["click"] = [app.root.winfo_rootx() + 5, app.root.winfo_rooty() + 5]
+        app.start()
+        assert not app.spammer.running
+        assert "on this window" in app.status.get()
+        top.destroy()
     finally:
         app.quit()
 
 
 def test_refuses_region_over_its_own_window():
-    app = make_app({"interact_vk": 0x20, "click": [-99999, -99999]})
+    app = make_app({"interact_vk": 0x20, "click": FAR})
     try:
         pump(app, 0.1)
-        app.settings["region"] = {"left": app.root.winfo_rootx() + 5,
-                                  "top": app.root.winfo_rooty() + 5, "width": 50, "height": 20}
+        region = {"left": app.root.winfo_rootx() + 5, "top": app.root.winfo_rooty() + 5,
+                  "width": 50, "height": 20}
+        app._region_chosen(region)
+        app.take_snapshot()
+        assert app.snapshot is None and "overlaps this window" in app.status.get()
+        app.snapshot = screen.Frame(50, 20, bytes(4000))  # e.g. window moved after
         app.start()
         assert not app.spammer.running
         assert "overlaps this window" in app.status.get()
@@ -302,10 +364,8 @@ def test_refuses_region_over_its_own_window():
 
 
 def test_capture_failure_stops_clicking():
-    app = make_app({"interact_vk": 0x20, "click": [-99999, -99999], "gap": 0.02})
+    app, top, canvas = ready_app()
     try:
-        top, canvas, region = watched_target(app)
-        app.settings["region"] = region
         app.start()
         assert app.spammer.running
         app._on_region_change(None, "screen capture failed: test")

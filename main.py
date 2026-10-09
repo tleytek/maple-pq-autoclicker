@@ -4,9 +4,10 @@ Spams your in-game "interact" key and a left click at a saved spot, fast.
 
 1. Record Interact (button): press the key you use to interact in game.
 2. F2: saves the mouse position as the spot to left-click.
-3. Select Region (optional): text to watch. Clicking stops as soon as it
-   changes from what it showed when you pressed start.
-4. F1: start / stop.   F3 slower, F4 faster.
+3. Select Region: the part of the screen to watch.
+4. Take Snapshot: saves what that region must look like. Clicking only
+   starts while the region matches it, and stops as soon as it doesn't.
+5. F1: start / stop.   F3 slower, F4 faster.
 """
 import json
 import os
@@ -24,6 +25,24 @@ APP_NAME = "Maple PQ Autoclicker"
 DATA_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"),
                         "MaplePQAutoclicker")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+SNAPSHOT_FILE = os.path.join(DATA_DIR, "snapshot.ppm")
+
+
+def load_snapshot(region):
+    """The saved snapshot, if it fits the region (else None)."""
+    if not region:
+        return None
+    frame = screen.load_frame(SNAPSHOT_FILE)
+    if frame is None or (frame.width, frame.height) != (region["width"], region["height"]):
+        return None
+    return frame
+
+
+def delete_snapshot():
+    try:
+        os.remove(SNAPSHOT_FILE)
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -172,10 +191,14 @@ class App:
         self.running = True
         self.capturer = screen.Capturer()  # UI-thread capture for the preview
         self.preview_photo = None
+        self.snapshot_photo = None
+        self.snapshot = load_snapshot(self.settings.get("region"))
+        self.match_px = None  # pixels the region currently differs from the snapshot
         self.watcher = None
         self.stop_reason = None  # shown in the State row after an auto-stop
 
         self._build_ui()
+        self._show_snapshot()
         self.hotkeys = clicker.HotkeyPoller(lambda vk: self.events.put(("key", vk))).start()
         self._refresh()
         self._afters = {"poll": self.root.after(50, self._poll),
@@ -204,6 +227,8 @@ class App:
             ("interact", "Interact key"),
             ("click", "Click spot"),
             ("region", "Watch region"),
+            ("snapshot", "Snapshot"),
+            ("match", "Region now"),
             ("speed", "Interval"),
             ("cycles", "Cycles"),
         ]
@@ -230,7 +255,7 @@ class App:
         region_btns.pack(fill=tk.X, pady=(0, 4), **pad)
         ttk.Button(region_btns, text="Select Region", command=self.select_region
                    ).pack(side=tk.LEFT)
-        ttk.Button(region_btns, text="Clear Region", command=self.clear_region
+        ttk.Button(region_btns, text="Take Snapshot", command=self.take_snapshot
                    ).pack(side=tk.LEFT, padx=4)
 
         speed = tk.Frame(self.root, bg=self.BG)
@@ -242,11 +267,15 @@ class App:
 
         prev_frame = tk.Frame(self.root, bg=self.BG)
         prev_frame.pack(fill=tk.X, pady=(0, 6), **pad)
-        tk.Label(prev_frame, text="Watching:", bg=self.BG, fg=self.DIM,
-                 font=("Segoe UI", 9)).pack(side=tk.LEFT, anchor="n")
+        for row, text in enumerate(("Snapshot:", "Now:")):
+            tk.Label(prev_frame, text=text, bg=self.BG, fg=self.DIM,
+                     font=("Segoe UI", 9)).grid(row=row, column=0, sticky="nw", pady=2)
+        self.snapshot_view = tk.Label(prev_frame, bg="black", text="(not taken)",
+                                      fg=self.DIM, font=("Segoe UI", 9))
+        self.snapshot_view.grid(row=0, column=1, sticky="w", padx=6, pady=2)
         self.preview = tk.Label(prev_frame, bg="black", text="(no region)",
                                 fg=self.DIM, font=("Segoe UI", 9))
-        self.preview.pack(side=tk.LEFT, padx=6)
+        self.preview.grid(row=1, column=1, sticky="w", padx=6, pady=2)
 
         opts = tk.Frame(self.root, bg=self.BG)
         opts.pack(fill=tk.X, **pad)
@@ -320,8 +349,19 @@ class App:
         self.vars["click"].set(f"({s['click'][0]}, {s['click'][1]})" if s["click"]
                                else "not set — F2")
         self.value_labels["click"].config(fg=self.FG if s["click"] else self.WARN)
-        self.vars["region"].set(fmt_region(s["region"]) if s.get("region")
-                                else "not set (optional)")
+        self.vars["region"].set(fmt_region(s["region"]) if s.get("region") else "not set")
+        self.value_labels["region"].config(fg=self.FG if s.get("region") else self.WARN)
+        self.vars["snapshot"].set("saved" if self.snapshot else "not taken")
+        self.value_labels["snapshot"].config(fg=self.FG if self.snapshot else self.WARN)
+        if self.match_px is None:
+            self.vars["match"].set("—")
+            self.value_labels["match"].config(fg=self.DIM)
+        elif self.match_px < screen.CHANGE_PIXELS:
+            self.vars["match"].set("matches snapshot")
+            self.value_labels["match"].config(fg=self.ACCENT)
+        else:
+            self.vars["match"].set(f"different ({self.match_px:,} px)")
+            self.value_labels["match"].config(fg=self.WARN)
         self.vars["speed"].set(fmt_speed(s["gap"]))
         self.vars["cycles"].set(f"{self.spammer.cycles:,}")
         self.start_btn.config(text="Stop" if running else "Start")
@@ -333,6 +373,10 @@ class App:
             out.append("click Record Interact")
         if not self.settings["click"]:
             out.append("put the mouse on the click spot and press F2")
+        if not self.settings.get("region"):
+            out.append("click Select Region")
+        elif not self.snapshot:
+            out.append("click Take Snapshot")
         return out
 
     def record_interact(self):
@@ -380,32 +424,74 @@ class App:
         if region:
             self.settings["region"] = region
             save_settings(self.settings)
-            self.set_status(f"Watch region set: {fmt_region(region)}.")
+            self._set_snapshot(None)  # an old snapshot doesn't fit a new region
+            self.set_status(f"Watch region set: {fmt_region(region)}. Now get the game to "
+                            "the screen clicking should run on and click Take Snapshot.")
         else:
             self.set_status("Region selection cancelled.")
         self._refresh()
         self._update_preview()
 
-    def clear_region(self):
-        self.settings.pop("region", None)
-        save_settings(self.settings)
-        self.set_status("Watch region cleared: clicking won't stop on its own.")
-        self._refresh()
-        self._update_preview()
+    def _set_snapshot(self, frame):
+        self.snapshot = frame
+        if frame is None:
+            delete_snapshot()
+            self.snapshot_photo = None
+            self.snapshot_view.config(image="", text="(not taken)")
+        else:
+            screen.save_frame(frame, SNAPSHOT_FILE)
+            self._show_snapshot()
+
+    def _show_snapshot(self):
+        if self.snapshot is None:
+            return
+        self.snapshot_photo = frame_photo(self.snapshot)
+        self.snapshot_view.config(image=self.snapshot_photo, text="")
+
+    def take_snapshot(self):
+        region = self.settings.get("region")
+        if not region:
+            self.set_status("Click Select Region first.")
+            return
+        self.stop()
+        if self._region_on_window():
+            self.set_status("Can't take a snapshot: the region overlaps this window. "
+                            "Move the window or select the region again.")
+            return
+        try:
+            frame = self.capturer.grab(region)
+        except OSError as e:
+            self.set_status(f"Can't take a snapshot: {e}.")
+            return
+        self._set_snapshot(frame)
+        self.stop_reason = None
+        self.set_status("Snapshot saved. Clicking will only start while the region "
+                        "looks like this, and stops as soon as it doesn't.")
+        if frame.is_blank():
+            self.log("Note: the snapshot is one solid colour. If the game is in exclusive "
+                     "fullscreen, captures may be black; use windowed mode.")
+        self._update_preview(frame)
 
     def _update_preview(self, frame=None):
         region = self.settings.get("region")
         if not region:
             self.preview_photo = None
+            self.match_px = None
             self.preview.config(image="", text="(no region)")
+            self._refresh()
             return
         try:
             frame = frame or self.capturer.grab(region)
         except OSError as e:
+            self.match_px = None
             self.preview.config(image="", text=f"(can't capture: {e})")
+            self._refresh()
             return
+        self.match_px = (screen.changed_pixels(frame, self.snapshot)
+                         if self.snapshot else None)
         self.preview_photo = frame_photo(frame)
         self.preview.config(image=self.preview_photo, text="")
+        self._refresh()
 
     def _window_box(self):
         r = self.root
@@ -448,33 +534,31 @@ class App:
             self.set_status("Can't start: the click spot is on this window. "
                             "Move the window or set the spot again with F2.")
             return
-        region = self.settings.get("region")
-        baseline = None
-        if region:
-            if self._region_on_window():
-                self.set_status("Can't start: the watch region overlaps this window. "
-                                "Move the window or select the region again.")
-                return
-            try:
-                baseline = self.capturer.grab(region)  # what the text looks like now
-            except OSError as e:
-                self.set_status(f"Can't start: {e}.")
-                return
+        region = self.settings["region"]
+        if self._region_on_window():
+            self.set_status("Can't start: the watch region overlaps this window. "
+                            "Move the window or select the region again.")
+            return
+        try:
+            now = self.capturer.grab(region)
+        except OSError as e:
+            self.set_status(f"Can't start: {e}.")
+            return
+        differ = screen.changed_pixels(now, self.snapshot)
+        self._update_preview(now)
+        if differ >= screen.CHANGE_PIXELS:
+            self.set_status(f"Not started: the region doesn't match the snapshot "
+                            f"({differ:,} pixels differ). Get the game back to the snapshot "
+                            "screen, or click Take Snapshot again.")
+            return
         self.stop_reason = None
-        self.watcher = None
         self.spammer.start()  # before the watcher, so an instant change still stops it
-        if region:
-            self.watcher = screen.Watcher(region, baseline, self._on_region_change).start()
-            self._update_preview(baseline)
+        self.watcher = screen.Watcher(region, self.snapshot, self._on_region_change).start()
         s = self.settings
         self.set_status(f"Running: {clicker.key_name(s['interact_vk'])} + left click at "
-                        f"({s['click'][0]}, {s['click'][1]}) every {s['gap'] * 1000:.0f} ms"
-                        + (", stops when the watched region changes" if region else "")
-                        + ". F1 to stop.")
-        if region and baseline.is_blank():
-            self.log("Note: the watched region is one solid colour. If the game is in "
-                     "exclusive fullscreen, captures may be black; use windowed mode.")
-        if region and self._spot_in_region():
+                        f"({s['click'][0]}, {s['click'][1]}) every {s['gap'] * 1000:.0f} ms, "
+                        "stops when the region stops matching the snapshot. F1 to stop.")
+        if self._spot_in_region():
             self.log("Note: the click spot is inside the watched region, so if a click "
                      "changes it, clicking stops right away.")
         self._refresh()
@@ -501,7 +585,7 @@ class App:
             self.set_status(f"Stopped: {info}. Clicking stops when the region can't be checked.")
         else:
             self.stop_reason = "region changed"
-            self.set_status(f"Stopped: the watched region changed ({info:,} pixels) "
+            self.set_status(f"Stopped: the region no longer matches the snapshot ({info:,} pixels) "
                             f"after {self.spammer.cycles:,} cycles.")
             self._update_preview(frame)
         if watcher:
