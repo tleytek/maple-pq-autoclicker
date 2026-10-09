@@ -82,10 +82,13 @@ Tips:
   and click is held 15 ms with 15 ms between steps (so the game sees two
   separate interact presses), which makes about 8 sequences per second.
   Change the pause while running; the **Pause** row shows sequences/sec.
-- It won't start if the click spot or the watch region is on its own window.
+- It won't start if the click spot is on its own window, or the watch region
+  is on or right next to it (its shadow changes shade when you click
+  between the app and the game).
 - The region is compared pixel by pixel with the snapshot (no text reading,
-  so the game's small font isn't a problem). It matches when fewer than 10
-  pixels differ. While running, it stops when 10+ pixels differ in 2
+  so the game's small font isn't a problem). Faint colour shifts (under
+  8/255, like a window shadow or slight shading) are ignored. It matches
+  when fewer than 10 pixels clearly differ. While running, it stops when 10+ pixels differ in 2
   captures in a row, so a single flicker doesn't count.
 - Selecting a new region throws the old snapshot away.
 - Keep the region tight around the text. Anything moving inside it (your
