@@ -1,13 +1,13 @@
 """Maple PQ Autoclicker.
 
-Spams your in-game "interact" key and a left click at a saved spot, fast.
+Repeats: interact key, left click on a saved spot, interact key, pause.
 
 1. Record Interact (button): press the key you use to interact in game.
 2. F2: saves the mouse position as the spot to left-click.
 3. Select Region: the part of the screen to watch.
 4. Take Snapshot: saves what that region must look like. Clicking only
    starts while the region matches it, and stops as soon as it doesn't.
-5. F1: start / stop.   F3 slower, F4 faster.
+5. F1: start / stop.   F3 longer pause, F4 shorter pause.
 """
 import json
 import os
@@ -79,8 +79,15 @@ def save_settings(settings, path=None):
         json.dump(settings, f)
 
 
-def fmt_speed(gap):
-    return f"{gap * 1000:.0f} ms  ({1 / gap:.1f} / sec)"
+def sequence_seconds(settings):
+    """One interact/click/interact sequence plus the pause."""
+    steps = len(clicker.SEQUENCE)
+    return (2 * steps - 1) * settings["hold"] + settings["gap"]
+
+
+def fmt_speed(settings):
+    return (f"{settings['gap'] * 1000:.0f} ms  "
+            f"({1 / sequence_seconds(settings):.1f} seq / sec)")
 
 
 def fmt_region(r):
@@ -229,8 +236,8 @@ class App:
             ("region", "Watch region"),
             ("snapshot", "Snapshot"),
             ("match", "Region now"),
-            ("speed", "Interval"),
-            ("cycles", "Cycles"),
+            ("speed", "Pause"),
+            ("cycles", "Sequences"),
         ]
         for i, (key, label) in enumerate(rows):
             tk.Label(stats, text=label, bg=self.BG, fg=self.DIM,
@@ -264,6 +271,8 @@ class App:
                    ).pack(side=tk.LEFT)
         ttk.Button(speed, text="Faster", command=lambda: self.change_speed(clicker.faster)
                    ).pack(side=tk.LEFT, padx=4)
+        tk.Label(speed, text="(changes the pause)", bg=self.BG, fg=self.DIM,
+                 font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
 
         prev_frame = tk.Frame(self.root, bg=self.BG)
         prev_frame.pack(fill=tk.X, pady=(0, 6), **pad)
@@ -362,7 +371,7 @@ class App:
         else:
             self.vars["match"].set(f"different ({self.match_px:,} px)")
             self.value_labels["match"].config(fg=self.WARN)
-        self.vars["speed"].set(fmt_speed(s["gap"]))
+        self.vars["speed"].set(fmt_speed(s))
         self.vars["cycles"].set(f"{self.spammer.cycles:,}")
         self.start_btn.config(text="Stop" if running else "Start")
 
@@ -555,9 +564,10 @@ class App:
         self.spammer.start()  # before the watcher, so an instant change still stops it
         self.watcher = screen.Watcher(region, self.snapshot, self._on_region_change).start()
         s = self.settings
-        self.set_status(f"Running: {clicker.key_name(s['interact_vk'])} + left click at "
-                        f"({s['click'][0]}, {s['click'][1]}) every {s['gap'] * 1000:.0f} ms, "
-                        "stops when the region stops matching the snapshot. F1 to stop.")
+        key = clicker.key_name(s["interact_vk"])
+        self.set_status(f"Running: {key}, click ({s['click'][0]}, {s['click'][1]}), {key}, "
+                        f"pause {s['gap'] * 1000:.0f} ms. Stops when the region stops "
+                        "matching the snapshot. F1 to stop.")
         if self._spot_in_region():
             self.log("Note: the click spot is inside the watched region, so if a click "
                      "changes it, clicking stops right away.")
@@ -574,7 +584,7 @@ class App:
             return
         self._stop_watcher()
         self.spammer.stop()
-        self.set_status(f"Stopped after {self.spammer.cycles:,} cycles.")
+        self.set_status(f"Stopped after {self.spammer.cycles:,} sequences.")
         self._refresh()
 
     def _region_changed(self, frame, info):
@@ -586,7 +596,7 @@ class App:
         else:
             self.stop_reason = "region changed"
             self.set_status(f"Stopped: the region no longer matches the snapshot ({info:,} pixels) "
-                            f"after {self.spammer.cycles:,} cycles.")
+                            f"after {self.spammer.cycles:,} sequences.")
             self._update_preview(frame)
         if watcher:
             self.log(f"Checked the region {watcher.checks:,} times.")
@@ -598,7 +608,7 @@ class App:
     def change_speed(self, fn):
         self.settings["gap"] = fn(self.settings["gap"])
         save_settings(self.settings)
-        self.set_status(f"Interval: {fmt_speed(self.settings['gap'])}")
+        self.set_status(f"Pause: {fmt_speed(self.settings)}")
         self._refresh()
 
     def quit(self):

@@ -377,6 +377,20 @@ def test_capture_failure_stops_clicking():
         app.quit()
 
 
+def test_pause_row_and_sequence_rate():
+    s = dict(clicker.DEFAULT_SETTINGS, gap=0.05, hold=0.015)
+    assert abs(main.sequence_seconds(s) - 0.125) < 1e-9  # 5 x 15 ms + 50 ms pause
+    assert main.fmt_speed(s) == "50 ms  (8.0 seq / sec)"
+    app = make_app({"gap": 0.05, "hold": 0.015})
+    try:
+        assert app.vars["speed"].get() == "50 ms  (8.0 seq / sec)"
+        app.change_speed(clicker.faster)
+        assert app.vars["speed"].get().startswith("33 ms"), app.vars["speed"].get()
+        assert "Pause: 33 ms" in app.status.get()
+    finally:
+        app.quit()
+
+
 if __name__ == "__main__":
     clicker.set_dpi_aware()
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
