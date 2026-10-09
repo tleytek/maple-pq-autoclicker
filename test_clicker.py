@@ -136,6 +136,13 @@ def test_stop_mid_hold_releases():
     assert fake.log[-1][1] == [("key", 0x20, "up"), ("left", "up")]
 
 
+def test_elevation_checks():
+    import os
+    assert c.process_elevated(os.getpid()) == c.is_admin()
+    assert c.process_elevated(0) is None  # System Idle: can't be opened
+    assert c.game_blocks_input("no window has this title 1f3a") is False
+
+
 def test_hotkey_poller_fires_once_per_press():
     state = {c.VK_F1: False, c.VK_F2: False, c.VK_F3: False, c.VK_F4: False}
     got = []
@@ -153,6 +160,13 @@ def test_hotkey_poller_fires_once_per_press():
 def test_cursor_lands_on_exact_pixel():
     """Moves the real cursor (no clicks) and restores it."""
     c.set_dpi_aware()
+    if not c.is_admin():
+        fg = c.user32.GetForegroundWindow()
+        pid = c.wt.DWORD()
+        c.user32.GetWindowThreadProcessId(fg, c.ctypes.byref(pid))
+        if c.process_elevated(pid.value):
+            print("     skipped: an admin window has focus, so Windows blocks our input")
+            return
     left, top, w, h = c._virtual_desktop()
     orig = c.get_pos()
     rng = random.Random(1)

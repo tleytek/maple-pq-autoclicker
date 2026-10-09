@@ -28,6 +28,11 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 SNAPSHOT_FILE = os.path.join(DATA_DIR, "snapshot.ppm")
 
 
+ADMIN_HINT = ("Can't start: MapleStory runs as administrator, so Windows blocks this "
+              "app's keys and clicks. Close this app and run it as administrator "
+              "(right-click → Run as administrator).")
+
+
 def load_snapshot(region):
     """The saved snapshot, if it fits the region (else None)."""
     if not region:
@@ -214,6 +219,8 @@ class App:
         missing = self._missing()
         self.set_status("Ready. Press F1 to start." if not missing
                         else "Set up: " + " and ".join(missing) + ".")
+        if clicker.game_blocks_input():
+            self.set_status(ADMIN_HINT.replace("Can't start: ", ""))
 
     # ---- UI ------------------------------------------------------------- #
     def _build_ui(self):
@@ -538,6 +545,9 @@ class App:
         missing = self._missing()
         if missing:
             self.set_status("Can't start: " + " and ".join(missing) + ".")
+            return
+        if clicker.game_blocks_input():
+            self.set_status(ADMIN_HINT)
             return
         if self._spot_on_window():
             self.set_status("Can't start: the click spot is on this window. "

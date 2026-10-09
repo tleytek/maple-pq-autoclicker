@@ -19,6 +19,8 @@ from test_clicker import FakeSend
 
 TMP = tempfile.mkdtemp()
 FAR = [-99999, -99999]  # click spot that's never on the app window (input is fake)
+# Input is fake here, so an admin MapleStory being open mustn't block start.
+clicker.game_blocks_input = lambda: False
 
 
 def make_app(settings=None):
@@ -374,6 +376,24 @@ def test_capture_failure_stops_clicking():
         assert app.vars["state"].get() == "Stopped (can't see region)"
         top.destroy()
     finally:
+        app.quit()
+
+
+def test_refuses_when_the_game_blocks_input():
+    app, top, canvas = ready_app()
+    orig = clicker.game_blocks_input
+    try:
+        clicker.game_blocks_input = lambda: True
+        app.start()
+        assert not app.spammer.running and app.fake.log == []
+        assert "run it as administrator" in app.status.get(), app.status.get()
+        clicker.game_blocks_input = lambda: False
+        app.start()
+        assert app.spammer.running, app.status.get()
+        app.stop()
+        top.destroy()
+    finally:
+        clicker.game_blocks_input = orig
         app.quit()
 
 

@@ -76,6 +76,59 @@ def set_dpi_aware():
         user32.SetProcessDPIAware()
 
 
+GAME_TITLE = "MapleStory"
+kernel32 = ctypes.windll.kernel32
+advapi32 = ctypes.windll.advapi32
+kernel32.OpenProcess.restype = wt.HANDLE
+kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+kernel32.CloseHandle.argtypes = [wt.HANDLE]
+advapi32.OpenProcessToken.argtypes = [wt.HANDLE, wt.DWORD, ctypes.POINTER(wt.HANDLE)]
+user32.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+user32.FindWindowW.restype = wt.HWND
+
+
+def is_admin():
+    """True when this program runs as administrator."""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def process_elevated(pid):
+    """True/False whether a process runs as administrator; None if unknown."""
+    ph = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not ph:
+        return None
+    try:
+        tok = wt.HANDLE()
+        if not advapi32.OpenProcessToken(ph, 0x0008, ctypes.byref(tok)):  # TOKEN_QUERY
+            return None
+        try:
+            elevation, size = wt.DWORD(), wt.DWORD()
+            if not advapi32.GetTokenInformation(tok, 20, ctypes.byref(elevation), 4,
+                                                ctypes.byref(size)):  # TokenElevation
+                return None
+            return bool(elevation.value)
+        finally:
+            kernel32.CloseHandle(tok)
+    finally:
+        kernel32.CloseHandle(ph)
+
+
+def game_blocks_input(title=GAME_TITLE):
+    """True when the game window is open, runs as administrator, and this
+    program doesn't: Windows then silently drops all input we send to it."""
+    if is_admin():
+        return False
+    hwnd = user32.FindWindowW(None, title)
+    if not hwnd:
+        return False
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return process_elevated(pid.value) is True
+
+
 def get_pos():
     p = wt.POINT()
     user32.GetCursorPos(ctypes.byref(p))
