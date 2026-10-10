@@ -49,7 +49,9 @@ says how many pixels differ). After it stops on a change, it won't start
 again until the region matches the snapshot again. The snapshot is kept
 between runs; take a new one whenever you want a different screen.
 
-Each click: move to the spot and press, hold 15 ms, release, then pause.
+Each click: move to the spot and press, hold 35 ms, release, then pause.
+Clicks follow a fixed schedule, so the rhythm stays even. The hold is
+longer than one game frame, so the game never misses a click.
 The mouse is moved to the spot for every click, so you can't use it while
 it runs.
 
@@ -75,9 +77,13 @@ nothing.
 
 Tips:
 
-- The pause is the wait after each click. Default 50 ms, which with the
-  15 ms hold makes about 15 clicks per second. Change it while running; the
+- The pause is the wait after each click. Default 30 ms, which with the
+  35 ms hold makes about 15 clicks per second. Change it while running; the
   **Pause** row shows clicks/sec.
+- When clicking stops, **Show log** lists the measured timing, e.g.
+  `Click timing (last 120): every 65.0 ms on average, shortest 64.9 ms,
+  longest 65.1 ms`. If shortest and longest are close but it still feels
+  uneven, the unevenness is in the game, not the clicker.
 - It won't start if the click spot is on its own window, or the watch region
   is on or right next to it (its shadow changes shade when you click
   between the app and the game).
