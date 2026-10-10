@@ -11,8 +11,8 @@ from collections import deque
 
 user32 = ctypes.windll.user32
 
-VK_F1, VK_F2, VK_F3, VK_F4 = 0x70, 0x71, 0x72, 0x73
-HOTKEYS = {VK_F1: "F1", VK_F2: "F2", VK_F3: "F3", VK_F4: "F4"}
+VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6 = 0x70, 0x71, 0x72, 0x73, 0x74, 0x75
+HOTKEYS = {VK_F1: "F1", VK_F2: "F2", VK_F3: "F3", VK_F4: "F4", VK_F5: "F5", VK_F6: "F6"}
 
 MIN_GAP = 0.01   # shortest pause allowed between clicks: 10 ms
 MAX_GAP = 2.0
@@ -284,7 +284,7 @@ class Spammer:
 
 
 class HotkeyPoller:
-    """Polls F1-F4 globally (works while the game has focus) and calls
+    """Polls F1-F6 globally (works while the game has focus) and calls
     on_press(vk) on each fresh press from a background thread."""
 
     def __init__(self, on_press, keys=tuple(HOTKEYS), interval=0.01, is_down_fn=None):

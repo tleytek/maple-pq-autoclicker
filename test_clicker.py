@@ -160,17 +160,18 @@ def test_elevation_checks():
 
 
 def test_hotkey_poller_fires_once_per_press():
-    state = {c.VK_F1: False, c.VK_F2: False, c.VK_F3: False, c.VK_F4: False}
+    state = {vk: False for vk in c.HOTKEYS}
+    assert set(c.HOTKEYS) == {0x70, 0x71, 0x72, 0x73, 0x74, 0x75}  # F1-F6
     got = []
     poll = c.HotkeyPoller(lambda vk: got.append(vk), interval=0.002,
                           is_down_fn=lambda vk: state[vk]).start()
-    for vk in (c.VK_F1, c.VK_F2, c.VK_F1):
+    for vk in (c.VK_F1, c.VK_F2, c.VK_F6, c.VK_F1):
         state[vk] = True
         time.sleep(0.03)  # held for many polls
         state[vk] = False
         time.sleep(0.03)
     poll.stop()
-    assert got == [c.VK_F1, c.VK_F2, c.VK_F1], got
+    assert got == [c.VK_F1, c.VK_F2, c.VK_F6, c.VK_F1], got
 
 
 def test_cursor_lands_on_exact_pixel():

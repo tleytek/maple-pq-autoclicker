@@ -168,6 +168,16 @@ def test_speed_hotkeys_save():
         pump(app, 0.1)
         assert app.settings["gap"] == clicker.slower(clicker.slower(clicker.faster(g)))
         assert saved()["gap"] == app.settings["gap"]
+        h = app.settings["hold"]
+        app.events.put(("key", clicker.VK_F5))  # F5: longer hold
+        pump(app, 0.1)
+        assert app.settings["hold"] == round(h + 0.005, 3), app.settings["hold"]
+        app.events.put(("key", clicker.VK_F6))  # F6: shorter hold
+        app.events.put(("key", clicker.VK_F6))
+        pump(app, 0.1)
+        assert app.settings["hold"] == round(h - 0.005, 3), app.settings["hold"]
+        assert saved()["click_hold"] == app.settings["hold"]
+        assert app.settings["gap"] == saved()["gap"]  # pause untouched by F5/F6
     finally:
         app.quit()
 

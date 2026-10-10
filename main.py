@@ -328,7 +328,8 @@ class App:
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        tk.Label(self.root, text="F1 start/stop · F2 set click spot · F3/F4 longer/shorter pause",
+        tk.Label(self.root, text="F1 start/stop · F2 click spot · "
+                 "F3/F4 pause +/− · F5/F6 hold +/−",
                  bg=self.BG, fg="#555", font=("Segoe UI", 8)).pack(side=tk.BOTTOM, pady=(0, 4))
 
     def _toggle_log(self):
@@ -641,6 +642,10 @@ class App:
                     self.change_timer("gap", clicker.slower)
                 elif vk == clicker.VK_F4:
                     self.change_timer("gap", clicker.faster)
+                elif vk == clicker.VK_F5:
+                    self.change_timer("hold", clicker.longer_hold)
+                elif vk == clicker.VK_F6:
+                    self.change_timer("hold", clicker.shorter_hold)
         except queue.Empty:
             pass
         if self.running:

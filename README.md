@@ -74,6 +74,7 @@ nothing.
 | Hold: Shorter / Longer | Time between button down and up, 5 ms per click (5 ms to 1 s) |
 | Pause: Shorter / Longer | Time between button up and the next down, 5 ms per click (10 ms to 2 s) |
 | F3 / F4 | Longer / shorter pause (5 ms) |
+| F5 / F6 | Longer / shorter hold (5 ms) |
 | Always on top | Keep the window above the game |
 | Show log | Show what happened, with times |
 
