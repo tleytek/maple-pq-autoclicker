@@ -10,7 +10,6 @@ import os
 import tempfile
 import time
 import tkinter as tk
-import types
 
 import clicker
 import main
@@ -83,7 +82,7 @@ def watched_target(app, color="#203040"):
 
 def ready_app(gap=0.02):
     """Key, click spot, region and snapshot all set: ready to start."""
-    app = make_app({"interact_vk": 0x20, "click": FAR, "gap": gap, "hold": 0.005})
+    app = make_app({"click": FAR, "gap": gap, "hold": 0.005})
     top, canvas, region = watched_target(app)
     app._region_chosen(region)
     app.take_snapshot()
@@ -102,8 +101,8 @@ def wait_stopped(app, limit=1.0):
 def test_load_settings_rejects_bad_values():
     path = os.path.join(TMP, "bad.json")
     with open(path, "w") as f:
-        json.dump({"interact_vk": clicker.VK_F1, "click": [1, "x"], "gap": 0.0001,
-                   "hold": "fast"}, f)
+        json.dump({"interact_vk": 0x20, "click": [1, "x"], "gap": 0.0001,
+                   "hold": "fast"}, f)  # old interact key setting is ignored
     s = main.load_settings(path)
     assert s == clicker.DEFAULT_SETTINGS, s
     with open(path, "w") as f:
@@ -112,7 +111,7 @@ def test_load_settings_rejects_bad_values():
     with open(path, "w") as f:
         json.dump({"region": {"left": 1, "top": 2, "width": 3, "height": 50}}, f)
     assert "region" not in main.load_settings(path)  # too small
-    good = {"interact_vk": 0x20, "click": [5, 6], "gap": 0.03, "hold": 0.01,
+    good = {"click": [5, 6], "gap": 0.03, "hold": 0.01,
             "region": {"left": -100, "top": 2, "width": 300, "height": 50}}
     with open(path, "w") as f:
         json.dump(good, f)
@@ -131,34 +130,14 @@ def test_fresh_start_asks_for_setup_and_refuses_to_run():
     app = make_app()
     try:
         status = app.status.get()
-        for step in ("Record Interact", "F2", "Select Region"):
+        for step in ("F2", "Select Region"):
             assert step in status, status
-        assert app.vars["interact"].get() == "not set"
+        assert "Interact" not in status and "interact" not in app.vars
         assert app.vars["region"].get() == "not set"
         assert app.vars["snapshot"].get() == "not taken"
         app.start()
         assert not app.spammer.running
         assert "Can't start" in app.status.get()
-    finally:
-        app.quit()
-
-
-def test_record_interact_key():
-    app = make_app()
-    try:
-        app.record_interact()
-        assert app.capturing_key and app.vars["interact"].get() == "press a key…"
-        app._key_captured(types.SimpleNamespace(keycode=clicker.VK_F2))  # hotkey: refused
-        assert app.capturing_key and app.settings["interact_vk"] is None
-        app._key_captured(types.SimpleNamespace(keycode=0x20))
-        assert not app.capturing_key
-        assert app.settings["interact_vk"] == 0x20
-        assert app.vars["interact"].get() == "Space"
-        assert saved()["interact_vk"] == 0x20
-        # Esc cancels without changing it
-        app.record_interact()
-        app._key_captured(types.SimpleNamespace(keycode=clicker.VK_ESCAPE))
-        assert app.settings["interact_vk"] == 0x20 and not app.capturing_key
     finally:
         app.quit()
 
@@ -234,7 +213,7 @@ def test_frame_photo_scaling():
 
 
 def test_snapshot_is_saved_shown_and_survives_a_restart():
-    app = make_app({"interact_vk": 0x20, "click": FAR})
+    app = make_app({"click": FAR})
     try:
         app.take_snapshot()
         assert app.snapshot is None and "Select Region first" in app.status.get()
@@ -322,20 +301,6 @@ def test_change_stops_clicking_fast_and_blocks_restart():
         app.quit()
 
 
-def test_recording_key_stops_spamming():
-    app, top, canvas = ready_app()
-    try:
-        app.start()
-        assert app.spammer.running
-        app.record_interact()
-        assert not app.spammer.running and app.capturing_key and app.watcher is None
-        app.start()
-        assert not app.spammer.running
-        top.destroy()
-    finally:
-        app.quit()
-
-
 def test_refuses_click_spot_on_its_own_window():
     app, top, canvas = ready_app()
     try:
@@ -349,7 +314,7 @@ def test_refuses_click_spot_on_its_own_window():
 
 
 def test_refuses_region_over_its_own_window():
-    app = make_app({"interact_vk": 0x20, "click": FAR})
+    app = make_app({"click": FAR})
     try:
         pump(app, 0.1)
         region = {"left": app.root.winfo_rootx() + 5, "top": app.root.winfo_rooty() + 5,
@@ -366,7 +331,7 @@ def test_refuses_region_over_its_own_window():
 
 
 def test_region_just_beside_the_window_counts_as_overlap():
-    app = make_app({"interact_vk": 0x20, "click": FAR})
+    app = make_app({"click": FAR})
     try:
         pump(app, 0.1)
         x1 = app.root.winfo_rootx() + app.root.winfo_width()
@@ -417,11 +382,11 @@ def test_refuses_when_the_game_blocks_input():
 
 def test_pause_row_and_sequence_rate():
     s = dict(clicker.DEFAULT_SETTINGS, gap=0.05, hold=0.015)
-    assert abs(main.sequence_seconds(s) - 0.065) < 1e-9  # 15 ms click + 50 ms pause
-    assert main.fmt_speed(s) == "50 ms  (15.4 seq / sec)"
+    assert abs(main.click_seconds(s) - 0.065) < 1e-9  # 15 ms click + 50 ms pause
+    assert main.fmt_speed(s) == "50 ms  (15.4 clicks / sec)"
     app = make_app({"gap": 0.05, "hold": 0.015})
     try:
-        assert app.vars["speed"].get() == "50 ms  (15.4 seq / sec)"
+        assert app.vars["speed"].get() == "50 ms  (15.4 clicks / sec)"
         app.change_speed(clicker.faster)
         assert app.vars["speed"].get().startswith("33 ms"), app.vars["speed"].get()
         assert "Pause: 33 ms" in app.status.get()

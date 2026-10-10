@@ -10,27 +10,20 @@ import time
 user32 = ctypes.windll.user32
 
 VK_F1, VK_F2, VK_F3, VK_F4 = 0x70, 0x71, 0x72, 0x73
-VK_ESCAPE = 0x1B
 HOTKEYS = {VK_F1: "F1", VK_F2: "F2", VK_F3: "F3", VK_F4: "F4"}
 
 MIN_GAP = 0.01   # shortest pause allowed between clicks: 10 ms
 MAX_GAP = 2.0
 SPEED_STEP = 1.5  # F3 / F4 change the interval by this factor
 DEFAULT_SETTINGS = {
-    "interact_vk": None,   # virtual-key code of the interact key
     "click": None,         # [x, y] screen pixel to left-click
     "gap": 0.05,           # pause after each click
     "hold": 0.015,         # seconds the button is held down per click
 }
 
-INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
+INPUT_MOUSE = 0
 MOVE, ABSOLUTE, VIRTUALDESK = 0x0001, 0x8000, 0x4000
 LEFT_DOWN, LEFT_UP = 0x0002, 0x0004
-KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0008
-# Keys whose scan code needs the E0 (extended) prefix.
-EXTENDED_VKS = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,  # PgUp..Down arrow
-                0x2D, 0x2E, 0x5B, 0x5C, 0x5D, 0x6F, 0x90,       # Ins Del Win Apps / NumLk
-                0xA3, 0xA5}                                     # RCtrl RAlt
 
 ULONG_PTR = ctypes.c_size_t
 
@@ -40,23 +33,15 @@ class MOUSEINPUT(ctypes.Structure):
                 ("dwFlags", wt.DWORD), ("time", wt.DWORD), ("dwExtraInfo", ULONG_PTR)]
 
 
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD),
-                ("time", wt.DWORD), ("dwExtraInfo", ULONG_PTR)]
-
-
 class INPUT(ctypes.Structure):
     class _U(ctypes.Union):
-        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
+        _fields_ = [("mi", MOUSEINPUT)]
     _anonymous_ = ("u",)
     _fields_ = [("type", wt.DWORD), ("u", _U)]
 
 
 user32.SendInput.argtypes = [wt.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
 user32.SendInput.restype = wt.UINT
-user32.MapVirtualKeyW.argtypes = [wt.UINT, wt.UINT]
-user32.MapVirtualKeyW.restype = wt.UINT
-user32.GetKeyNameTextW.argtypes = [wt.LONG, wt.LPWSTR, ctypes.c_int]
 user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 user32.GetAsyncKeyState.restype = ctypes.c_short
 
@@ -135,18 +120,6 @@ def get_pos():
 
 def is_down(vk):
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
-
-
-def key_name(vk):
-    """Human-readable name for a virtual-key code, e.g. 'Space', 'Z'."""
-    if vk is None:
-        return "—"
-    scan = user32.MapVirtualKeyW(vk, 0)
-    lparam = (scan << 16) | ((1 << 24) if vk in EXTENDED_VKS else 0)
-    buf = ctypes.create_unicode_buffer(64)
-    if scan and user32.GetKeyNameTextW(lparam, buf, 64):
-        return buf.value.title() if len(buf.value) > 1 else buf.value.upper()
-    return f"key 0x{vk:02X}"
 
 
 # --------------------------------------------------------------------------- #

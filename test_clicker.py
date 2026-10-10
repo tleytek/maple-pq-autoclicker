@@ -35,12 +35,6 @@ def test_input_layout():
     assert down.type == c.INPUT_MOUSE and down.mi.dwFlags == c.LEFT_DOWN
 
 
-def test_key_names():
-    assert c.key_name(0x20) == "Space", c.key_name(0x20)
-    assert c.key_name(0x5A) == "Z", c.key_name(0x5A)
-    assert c.key_name(None) == "—"
-
-
 def test_to_abs_hits_pixel_centres():
     desk = (0, 0, 2560, 1440)
     assert c.to_abs(0, 0, desk) == (12, 22)
