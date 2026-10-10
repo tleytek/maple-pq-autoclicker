@@ -82,6 +82,19 @@ def test_spammer_clicks_then_pauses():
     assert batches[-1] == CLICK_UP  # always ends with the button released
 
 
+def test_spammer_records_even_press_times():
+    fake = FakeSend()
+    s = dict(clicker_settings, gap=0.03, hold=0.01)
+    sp = c.Spammer(s, send_fn=fake)
+    sp.start()
+    time.sleep(0.5)
+    sp.stop()
+    n, mean, lo, hi = c.timing_stats(sp.presses)
+    assert n >= 10 and abs(mean - 40) < 0.5, (n, mean)
+    assert hi - lo < 2.0, (lo, hi)  # fixed schedule: no drift, no extra pauses
+    assert c.timing_stats([]) == (0, None, None, None)
+
+
 def test_spammer_picks_up_live_changes():
     fake = FakeSend()
     s = dict(clicker_settings, gap=0.03, hold=0.005)

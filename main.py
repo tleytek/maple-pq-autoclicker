@@ -553,7 +553,14 @@ class App:
         self._stop_watcher()
         self.spammer.stop()
         self.set_status(f"Stopped after {self.spammer.cycles:,} clicks.")
+        self._log_timing()
         self._refresh()
+
+    def _log_timing(self):
+        n, mean, lo, hi = clicker.timing_stats(self.spammer.presses)
+        if n:
+            self.log(f"Click timing (last {n:,}): every {mean:.1f} ms on average, "
+                     f"shortest {lo:.1f} ms, longest {hi:.1f} ms.")
 
     def _region_changed(self, frame, info):
         watcher, self.watcher = self.watcher, None
@@ -568,6 +575,7 @@ class App:
             self._update_preview(frame)
         if watcher:
             self.log(f"Checked the region {watcher.checks:,} times.")
+        self._log_timing()
         self._refresh()
 
     def toggle(self):

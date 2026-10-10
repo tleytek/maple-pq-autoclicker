@@ -263,6 +263,8 @@ def test_wont_start_unless_region_matches_snapshot():
         app.events.put(("key", clicker.VK_F1))
         pump(app, 0.1)
         assert not app.spammer.running and app.watcher is None
+        log = app.log_text.get("1.0", "end")
+        assert "Click timing (last" in log and "longest" in log, log[-300:]
         top.destroy()
     finally:
         app.quit()

@@ -6,6 +6,7 @@ import ctypes
 import ctypes.wintypes as wt
 import threading
 import time
+from collections import deque
 
 user32 = ctypes.windll.user32
 
@@ -181,10 +182,36 @@ def slower(gap):
 # --------------------------------------------------------------------------- #
 # Spammer
 # --------------------------------------------------------------------------- #
+THREAD_PRIORITY_TIME_CRITICAL = 15
+kernel32.GetCurrentThread.restype = wt.HANDLE
+kernel32.SetThreadPriority.argtypes = [wt.HANDLE, ctypes.c_int]
+
+
+def boost_current_thread():
+    """Run this thread ahead of normal work, so a busy game (or this app's
+    own screen checks) can't delay a click. 1 ms system timer while we're at it."""
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+        kernel32.SetThreadPriority(kernel32.GetCurrentThread(),
+                                   THREAD_PRIORITY_TIME_CRITICAL)
+    except Exception:
+        pass
+
+
+def timing_stats(press_times):
+    """(intervals, mean_ms, min_ms, max_ms) between consecutive presses."""
+    t = list(press_times)
+    gaps = [(b - a) * 1000 for a, b in zip(t, t[1:])]
+    if not gaps:
+        return 0, None, None, None
+    return len(gaps), sum(gaps) / len(gaps), min(gaps), max(gaps)
+
+
 class Spammer:
     """Background thread: left-clicks the saved spot, pauses `gap` seconds,
-    and repeats until stopped. Reads `settings` every click, so pause /
-    position changes apply while it runs."""
+    and repeats until stopped. Presses follow a fixed schedule (every
+    hold + gap, start to start) so the rhythm stays even. Reads `settings`
+    every click, so pause / position changes apply while it runs."""
 
     def __init__(self, settings, send_fn=None):
         self.settings = settings
@@ -192,6 +219,7 @@ class Spammer:
         self.stop_event = threading.Event()
         self.thread = None
         self.cycles = 0
+        self.presses = deque(maxlen=500)  # perf_counter time of each press
 
     @property
     def running(self):
@@ -202,6 +230,7 @@ class Spammer:
             return
         self.stop_event.clear()
         self.cycles = 0
+        self.presses.clear()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
@@ -211,16 +240,22 @@ class Spammer:
             self.thread.join(1)
 
     def _run(self):
+        boost_current_thread()
+        nxt = time.perf_counter()
         try:
             while not self.stop_event.is_set():
                 s = self.settings
                 x, y = s["click"]
                 self.send(move_input(x, y), button_input(True))  # move + press, atomic
-                if not wait_until(time.perf_counter() + s["hold"], self.stop_event):
+                self.presses.append(time.perf_counter())
+                if not wait_until(nxt + s["hold"], self.stop_event):
                     break
                 self.send(button_input(False))
                 self.cycles += 1
-                if not wait_until(time.perf_counter() + s["gap"], self.stop_event):
+                # next press is a fixed period after this one's scheduled
+                # time; if we fell behind, carry on from now (no burst)
+                nxt = max(nxt + s["hold"] + s["gap"], time.perf_counter())
+                if not wait_until(nxt, self.stop_event):
                     break
         finally:
             self.send(button_input(False))  # never leave the button held down
