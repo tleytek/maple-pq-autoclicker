@@ -68,7 +68,8 @@ def load_settings(path=None):
             settings["click"] = pos
         if screen.region_is_valid(data.get("region")):
             settings["region"] = {k: data["region"][k] for k in ("left", "top", "width", "height")}
-        for key, lo, hi in (("gap", clicker.MIN_GAP, clicker.MAX_GAP), ("hold", 0.001, 0.5)):
+        # (a saved "hold" from older versions is ignored: always the default)
+        for key, lo, hi in (("gap", clicker.MIN_GAP, clicker.MAX_GAP),):
             v = data.get(key)
             if isinstance(v, (int, float)) and lo <= v <= hi:
                 settings[key] = float(v)

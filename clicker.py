@@ -18,8 +18,10 @@ MAX_GAP = 2.0
 SPEED_STEP = 1.5  # F3 / F4 change the interval by this factor
 DEFAULT_SETTINGS = {
     "click": None,         # [x, y] screen pixel to left-click
-    "gap": 0.05,           # pause after each click
-    "hold": 0.015,         # seconds the button is held down per click
+    "gap": 0.03,           # pause after each click (35 + 30 ms = ~15 clicks/sec)
+    "hold": 0.035,         # seconds the button is held down per click: longer
+                           # than a game frame (16.7 ms at 60 fps, 33 at 30) so
+                           # every click is seen; shorter ones were sometimes missed
 }
 
 INPUT_MOUSE = 0

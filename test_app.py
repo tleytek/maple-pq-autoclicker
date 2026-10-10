@@ -111,11 +111,11 @@ def test_load_settings_rejects_bad_values():
     with open(path, "w") as f:
         json.dump({"region": {"left": 1, "top": 2, "width": 3, "height": 50}}, f)
     assert "region" not in main.load_settings(path)  # too small
-    good = {"click": [5, 6], "gap": 0.03, "hold": 0.01,
+    good = {"click": [5, 6], "gap": 0.03,
             "region": {"left": -100, "top": 2, "width": 300, "height": 50}}
     with open(path, "w") as f:
-        json.dump(good, f)
-    assert main.load_settings(path) == good
+        json.dump(dict(good, hold=0.015), f)  # old saved hold is ignored
+    assert main.load_settings(path) == dict(good, hold=clicker.DEFAULT_SETTINGS["hold"])
 
 
 def test_load_snapshot_must_fit_the_region():
@@ -383,12 +383,13 @@ def test_refuses_when_the_game_blocks_input():
 
 
 def test_pause_row_and_sequence_rate():
-    s = dict(clicker.DEFAULT_SETTINGS, gap=0.05, hold=0.015)
-    assert abs(main.click_seconds(s) - 0.065) < 1e-9  # 15 ms click + 50 ms pause
-    assert main.fmt_speed(s) == "50 ms  (15.4 clicks / sec)"
+    s = dict(clicker.DEFAULT_SETTINGS, gap=0.05)
+    assert abs(main.click_seconds(s) - 0.085) < 1e-9  # 35 ms click + 50 ms pause
+    assert main.fmt_speed(s) == "50 ms  (11.8 clicks / sec)"
     app = make_app({"gap": 0.05, "hold": 0.015})
     try:
-        assert app.vars["speed"].get() == "50 ms  (15.4 clicks / sec)"
+        assert app.settings["hold"] == 0.035
+        assert app.vars["speed"].get() == "50 ms  (11.8 clicks / sec)"
         app.change_speed(clicker.faster)
         assert app.vars["speed"].get().startswith("33 ms"), app.vars["speed"].get()
         assert "Pause: 33 ms" in app.status.get()
