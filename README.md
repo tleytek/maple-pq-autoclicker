@@ -1,12 +1,11 @@
 # Maple PQ Autoclicker
 
-A small always-on-top window for MapleStory party quests. It repeats
-**interact key → left click on one spot → interact key → pause**, fast,
-until you stop it.
+A small always-on-top window for MapleStory party quests. It spams a
+**left click on one spot**, fast, until you stop it, but only while the
+screen shows what you expect.
 
 You set up:
 
-- **Interact key**: the key you use to talk / pick up / interact in game.
 - **Click spot**: where on the screen to left-click.
 - **Watch region + snapshot**: a part of the screen (e.g. the NPC's text)
   and a saved picture of what it should look like. Clicking only starts
@@ -38,27 +37,26 @@ To build the exe yourself, run **`build.bat`**. It writes
 
 ## Usage
 
-1. Click **Record Interact**, then press your interact key (Esc cancels).
-2. Put the mouse where you want it to click and press **F2**.
-3. Click **Select Region** and drag a box around the text to watch.
-4. With the game on the screen where clicking should run, click
+1. Put the mouse where you want it to click and press **F2**.
+2. Click **Select Region** and drag a box around the text to watch.
+3. With the game on the screen where clicking should run, click
    **Take Snapshot**. The **Snapshot** and **Now** previews show the saved
    picture and the live region; **Region now** says whether they match.
-5. Switch to the game and press **F1** to start. Press **F1** again to stop.
+4. Switch to the game and press **F1** to start. Press **F1** again to stop.
 
 If the region doesn't match the snapshot, F1 does nothing (the status line
 says how many pixels differ). After it stops on a change, it won't start
 again until the region matches the snapshot again. The snapshot is kept
 between runs; take a new one whenever you want a different screen.
 
-Each sequence is: tap the interact key, left-click the spot, tap the
-interact key, then pause. The mouse is moved to the spot for every click, so
-you can't use it while it runs.
+Each click: move to the spot and press, hold 15 ms, release, then pause.
+The mouse is moved to the spot for every click, so you can't use it while
+it runs.
 
 ### Why administrator?
 
-MapleStory runs as administrator, and Windows silently ignores keys and
-clicks that normal programs send to an administrator program. So the app
+MapleStory runs as administrator, and Windows silently ignores clicks that
+normal programs send to an administrator program. So the app
 has to run as administrator too: the exe asks every time it opens, and
 `run.bat` starts it that way. If it's ever started without admin while an
 admin MapleStory is open, Start refuses and says so instead of clicking into
@@ -66,7 +64,6 @@ nothing.
 
 | Control | Action |
 |---|---|
-| Record Interact | Set the interact key (press it after clicking the button) |
 | F2 | Set the click spot to where the mouse is now |
 | Select Region | Pick the part of the screen to watch (drag a box; Esc cancels) |
 | Take Snapshot | Save what the region must look like for clicking to run |
@@ -78,18 +75,18 @@ nothing.
 
 Tips:
 
-- The pause is the wait after each sequence. Default 50 ms. Each key press
-  and click is held 15 ms with 15 ms between steps (so the game sees two
-  separate interact presses), which makes about 8 sequences per second.
-  Change the pause while running; the **Pause** row shows sequences/sec.
+- The pause is the wait after each click. Default 50 ms, which with the
+  15 ms hold makes about 15 clicks per second. Change it while running; the
+  **Pause** row shows clicks/sec.
 - It won't start if the click spot is on its own window, or the watch region
   is on or right next to it (its shadow changes shade when you click
   between the app and the game).
 - The region is compared pixel by pixel with the snapshot (no text reading,
   so the game's small font isn't a problem). Faint colour shifts (under
   8/255, like a window shadow or slight shading) are ignored. It matches
-  when fewer than 10 pixels clearly differ. While running, it stops when 10+ pixels differ in 2
-  captures in a row, so a single flicker doesn't count.
+  when fewer than 10 pixels clearly differ. While running, it stops when
+  10+ pixels differ in 2 captures in a row, so a single flicker doesn't
+  count.
 - Selecting a new region throws the old snapshot away.
 - Keep the region tight around the text. Anything moving inside it (your
   character, mobs, animated backgrounds) also counts as a change.
@@ -109,7 +106,7 @@ python test_screen.py
 python test_app.py
 ```
 
-They don't press keys or click: input is sent to a fake. One test moves the
+They don't click: input is sent to a fake. One test moves the
 cursor (no clicks) to check it lands on the exact pixel, then puts it back.
 The screen tests open small windows and capture them, so run them on a
 visible desktop.
