@@ -49,7 +49,8 @@ says how many pixels differ). After it stops on a change, it won't start
 again until the region matches the snapshot again. The snapshot is kept
 between runs; take a new one whenever you want a different screen.
 
-Each click: move to the spot and press, hold 35 ms, release, then pause.
+Each click: move to the spot and press, hold (default 35 ms), release,
+then pause (default 30 ms). Both timers are adjustable.
 Clicks follow a fixed schedule, so the rhythm stays even. The hold is
 longer than one game frame, so the game never misses a click.
 The mouse is moved to the spot for every click, so you can't use it while
@@ -70,16 +71,18 @@ nothing.
 | Select Region | Pick the part of the screen to watch (drag a box; Esc cancels) |
 | Take Snapshot | Save what the region must look like for clicking to run |
 | F1 / Start | Start / stop |
-| F3 / Slower | Longer pause (×1.5) |
-| F4 / Faster | Shorter pause (÷1.5, down to 10 ms) |
+| Hold: Shorter / Longer | Time between button down and up, 5 ms per click (5 ms to 1 s) |
+| Pause: Shorter / Longer | Time between button up and the next down, 5 ms per click (10 ms to 2 s) |
+| F3 / F4 | Longer / shorter pause (5 ms) |
 | Always on top | Keep the window above the game |
 | Show log | Show what happened, with times |
 
 Tips:
 
-- The pause is the wait after each click. Default 30 ms, which with the
-  35 ms hold makes about 15 clicks per second. Change it while running; the
-  **Pause** row shows clicks/sec.
+- **Hold** is button down → up, **Pause** is button up → next down. The
+  defaults (35 + 30 ms) make about 15 clicks per second; the **Rate** row
+  shows it. Change either while running. A hold under ~17 ms (one game
+  frame) turns orange: the game can miss clicks that short.
 - When clicking stops, **Show log** lists the measured timing, e.g.
   `Click timing (last 120): every 65.0 ms on average, shortest 64.9 ms,
   longest 65.1 ms`. If shortest and longest are close but it still feels
