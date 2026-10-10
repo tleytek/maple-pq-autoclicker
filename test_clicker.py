@@ -1,6 +1,6 @@
 """Tests for clicker.py. Run: python test_clicker.py
 
-Nothing here presses keys or clicks: SendInput is replaced by a recorder.
+Nothing here clicks: SendInput is replaced by a recorder.
 The cursor-accuracy test moves the real cursor (no click) and puts it back.
 """
 import random
@@ -9,13 +9,11 @@ import time
 
 import clicker as c
 
-clicker_settings = dict(c.DEFAULT_SETTINGS, interact_vk=0x20, click=[100, 200])
+clicker_settings = dict(c.DEFAULT_SETTINGS, click=[100, 200])
 
 
 def decode(inp):
-    if inp.type == c.INPUT_KEYBOARD:
-        up = bool(inp.ki.dwFlags & c.KEYEVENTF_KEYUP)
-        return ("key", inp.ki.wVk, "up" if up else "down")
+    assert inp.type == c.INPUT_MOUSE, "only mouse input is ever sent"
     f = inp.mi.dwFlags
     if f & c.MOVE:
         return ("move", inp.mi.dx, inp.mi.dy)
@@ -31,16 +29,10 @@ class FakeSend:
         return len(inputs)
 
 
-def test_key_input_uses_scan_codes():
-    space = c.key_input(0x20, True)
-    assert space.type == c.INPUT_KEYBOARD
-    assert space.ki.wScan == 0x39, hex(space.ki.wScan)  # hardware scan code for Space
-    assert space.ki.dwFlags == c.KEYEVENTF_SCANCODE
-    up = c.key_input(0x20, False)
-    assert up.ki.dwFlags == c.KEYEVENTF_SCANCODE | c.KEYEVENTF_KEYUP
-    arrow = c.key_input(0x26, True)  # Up arrow is an extended key
-    assert arrow.ki.dwFlags & c.KEYEVENTF_EXTENDEDKEY
+def test_input_layout():
     assert c.ctypes.sizeof(c.INPUT) == 40  # x64 layout
+    down = c.button_input(True)
+    assert down.type == c.INPUT_MOUSE and down.mi.dwFlags == c.LEFT_DOWN
 
 
 def test_key_names():
@@ -67,10 +59,10 @@ def test_speed_steps_are_clamped():
     assert g == c.MAX_GAP
 
 
-KEY_DOWN, KEY_UP = [("key", 0x20, "down")], [("key", 0x20, "up")]
+CLICK_UP = [("left", "up")]
 
 
-def test_spammer_sequence_is_interact_click_interact_pause():
+def test_spammer_clicks_then_pauses():
     fake = FakeSend()
     s = dict(clicker_settings, gap=0.04, hold=0.01)
     sp = c.Spammer(s, send_fn=fake)
@@ -79,30 +71,21 @@ def test_spammer_sequence_is_interact_click_interact_pause():
     sp.stop()
     assert not sp.running
     batches = [b for _, b in fake.log]
-    # one cycle: interact (down/up), click (move+down/up), interact (down/up)
-    first = batches[:6]
-    assert first[0] == KEY_DOWN and first[1] == KEY_UP, first
-    assert first[2][0][0] == "move" and first[2][1] == ("left", "down"), first
-    assert first[3] == [("left", "up")], first
-    assert first[4] == KEY_DOWN and first[5] == KEY_UP, first
-    move = first[2][0]
-    assert (move[1], move[2]) == c.to_abs(100, 200)
-    # the pattern repeats exactly
-    full = (len(batches) - 1) // 6 * 6
-    for i in range(0, full, 6):
-        assert [b[-1] for b in batches[i:i + 6]] == [b[-1] for b in first], i
-    # within a sequence: each press is held `hold`, with a `hold` gap between
-    # steps, so the second interact press is clearly separate from the first
+    # one click: move+left down (atomic), then left up; nothing else
+    down, up = batches[0], batches[1]
+    assert down[0] == ("move",) + c.to_abs(100, 200) and down[1] == ("left", "down"), down
+    assert up == CLICK_UP, up
+    full = (len(batches) - 1) // 2 * 2
+    for i in range(0, full, 2):
+        assert batches[i] == down and batches[i + 1] == CLICK_UP, i
     times = [t for t, _ in fake.log]
-    for i in range(0, 5):
-        assert abs(times[i + 1] - times[i] - 0.01) < 0.004, (i, times[i + 1] - times[i])
-    # ...then the pause: last key up -> next sequence's first key down
-    pauses = [times[i + 6] - times[i + 5] for i in range(0, full - 6, 6)]
+    holds = [times[i + 1] - times[i] for i in range(0, full, 2)]
+    pauses = [times[i + 2] - times[i + 1] for i in range(0, full - 2, 2)]
+    assert all(abs(h - 0.01) < 0.004 for h in holds), holds
     assert pauses and all(abs(p - 0.04) < 0.004 for p in pauses), pauses
-    # sequences are 5 holds + pause apart: 0.09 s -> ~5-6 in 0.5 s
-    assert 5 <= sp.cycles <= 6, sp.cycles
-    # always ends with key + button released
-    assert batches[-1] == [("key", 0x20, "up"), ("left", "up")], batches[-1]
+    # a click every hold + pause = 50 ms -> ~10 in 0.5 s
+    assert 9 <= sp.cycles <= 11, sp.cycles
+    assert batches[-1] == CLICK_UP  # always ends with the button released
 
 
 def test_spammer_picks_up_live_changes():
@@ -118,10 +101,10 @@ def test_spammer_picks_up_live_changes():
     sp.stop()
     moves = [b[0] for t, b in fake.log if t > mark + 0.07 and b[0][0] == "move"]
     assert moves and all(m[1:] == c.to_abs(300, 400) for m in moves)
-    # clicks are 5 holds + pause apart
+    # clicks are hold + pause apart
     starts = [t for t, b in fake.log if t > mark + 0.1 and b[0][0] == "move"]
     gaps = [b - a for a, b in zip(starts, starts[1:])]
-    assert gaps and all(abs(g - 0.085) < 0.006 for g in gaps), gaps
+    assert gaps and all(abs(g - 0.065) < 0.005 for g in gaps), gaps
 
 
 def test_stop_mid_hold_releases():
@@ -129,11 +112,11 @@ def test_stop_mid_hold_releases():
     s = dict(clicker_settings, gap=2.0, hold=1.0)
     sp = c.Spammer(s, send_fn=fake)
     sp.start()
-    time.sleep(0.05)  # inside the key hold
+    time.sleep(0.05)  # inside the click hold
     t0 = time.perf_counter()
     sp.stop()
     assert time.perf_counter() - t0 < 0.1
-    assert fake.log[-1][1] == [("key", 0x20, "up"), ("left", "up")]
+    assert fake.log[-1][1] == CLICK_UP
 
 
 def test_elevation_checks():

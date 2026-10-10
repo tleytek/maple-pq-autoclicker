@@ -305,7 +305,7 @@ def test_change_stops_clicking_fast_and_blocks_restart():
         assert app.watcher is None
         assert app.vars["state"].get() == "Stopped (region changed)"
         assert "no longer matches the snapshot" in app.status.get(), app.status.get()
-        assert app.fake.log[-1][1] == [("key", 0x20, "up"), ("left", "up")]
+        assert app.fake.log[-1][1] == [("left", "up")]
         # still on the changed screen: start is refused (the snapshot is kept)
         sent = len(app.fake.log)
         app.start()
@@ -417,11 +417,11 @@ def test_refuses_when_the_game_blocks_input():
 
 def test_pause_row_and_sequence_rate():
     s = dict(clicker.DEFAULT_SETTINGS, gap=0.05, hold=0.015)
-    assert abs(main.sequence_seconds(s) - 0.125) < 1e-9  # 5 x 15 ms + 50 ms pause
-    assert main.fmt_speed(s) == "50 ms  (8.0 seq / sec)"
+    assert abs(main.sequence_seconds(s) - 0.065) < 1e-9  # 15 ms click + 50 ms pause
+    assert main.fmt_speed(s) == "50 ms  (15.4 seq / sec)"
     app = make_app({"gap": 0.05, "hold": 0.015})
     try:
-        assert app.vars["speed"].get() == "50 ms  (8.0 seq / sec)"
+        assert app.vars["speed"].get() == "50 ms  (15.4 seq / sec)"
         app.change_speed(clicker.faster)
         assert app.vars["speed"].get().startswith("33 ms"), app.vars["speed"].get()
         assert "Pause: 33 ms" in app.status.get()

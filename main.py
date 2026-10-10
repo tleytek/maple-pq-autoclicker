@@ -87,9 +87,8 @@ def save_settings(settings, path=None):
 
 
 def sequence_seconds(settings):
-    """One interact/click/interact sequence plus the pause."""
-    steps = len(clicker.SEQUENCE)
-    return (2 * steps - 1) * settings["hold"] + settings["gap"]
+    """One click (button held `hold`) plus the pause."""
+    return settings["hold"] + settings["gap"]
 
 
 def fmt_speed(settings):
