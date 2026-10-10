@@ -68,7 +68,11 @@ def load_settings(path=None):
             settings["click"] = pos
         if screen.region_is_valid(data.get("region")):
             settings["region"] = {k: data["region"][k] for k in ("left", "top", "width", "height")}
-        # (a saved "hold" from older versions is ignored: always the default)
+        # The hold is saved as "click_hold". An old "hold" entry (v1.4.0 and
+        # earlier saved 15 ms there automatically) is ignored.
+        hold = data.get("click_hold")
+        if isinstance(hold, (int, float)) and clicker.MIN_HOLD <= hold <= clicker.MAX_HOLD:
+            settings["hold"] = float(hold)
         for key, lo, hi in (("gap", clicker.MIN_GAP, clicker.MAX_GAP),):
             v = data.get(key)
             if isinstance(v, (int, float)) and lo <= v <= hi:
@@ -79,8 +83,10 @@ def load_settings(path=None):
 def save_settings(settings, path=None):
     path = path or SETTINGS_FILE
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = dict(settings)
+    data["click_hold"] = data.pop("hold")
     with open(path, "w") as f:
-        json.dump(settings, f)
+        json.dump(data, f)
 
 
 def click_seconds(settings):
@@ -88,9 +94,12 @@ def click_seconds(settings):
     return settings["hold"] + settings["gap"]
 
 
+def fmt_ms(seconds):
+    return f"{seconds * 1000:.0f} ms"
+
+
 def fmt_speed(settings):
-    return (f"{settings['gap'] * 1000:.0f} ms  "
-            f"({1 / click_seconds(settings):.1f} clicks / sec)")
+    return f"{1 / click_seconds(settings):.1f} clicks / sec"
 
 
 def fmt_region(r):
@@ -239,7 +248,9 @@ class App:
             ("region", "Watch region"),
             ("snapshot", "Snapshot"),
             ("match", "Region now"),
-            ("speed", "Pause"),
+            ("hold", "Hold (down → up)"),
+            ("gap", "Pause (up → down)"),
+            ("speed", "Rate"),
             ("cycles", "Clicks"),
         ]
         for i, (key, label) in enumerate(rows):
@@ -266,14 +277,19 @@ class App:
         ttk.Button(region_btns, text="Take Snapshot", command=self.take_snapshot
                    ).pack(side=tk.LEFT, padx=4)
 
-        speed = tk.Frame(self.root, bg=self.BG)
-        speed.pack(fill=tk.X, pady=(0, 8), **pad)
-        ttk.Button(speed, text="Slower", command=lambda: self.change_speed(clicker.slower)
-                   ).pack(side=tk.LEFT)
-        ttk.Button(speed, text="Faster", command=lambda: self.change_speed(clicker.faster)
-                   ).pack(side=tk.LEFT, padx=4)
-        tk.Label(speed, text="(changes the pause)", bg=self.BG, fg=self.DIM,
-                 font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
+        timers = tk.Frame(self.root, bg=self.BG)
+        timers.pack(fill=tk.X, pady=(0, 8), **pad)
+        for row, (label, key, shorter, longer) in enumerate((
+                ("Hold", "hold", clicker.shorter_hold, clicker.longer_hold),
+                ("Pause", "gap", clicker.faster, clicker.slower))):
+            tk.Label(timers, text=label, bg=self.BG, fg=self.DIM, width=6, anchor="w",
+                     font=("Segoe UI", 9)).grid(row=row, column=0, sticky="w", pady=1)
+            ttk.Button(timers, text="Shorter",
+                       command=lambda k=key, f=shorter: self.change_timer(k, f)
+                       ).grid(row=row, column=1, pady=1)
+            ttk.Button(timers, text="Longer",
+                       command=lambda k=key, f=longer: self.change_timer(k, f)
+                       ).grid(row=row, column=2, padx=4, pady=1)
 
         prev_frame = tk.Frame(self.root, bg=self.BG)
         prev_frame.pack(fill=tk.X, pady=(0, 6), **pad)
@@ -312,7 +328,7 @@ class App:
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        tk.Label(self.root, text="F1 start/stop · F2 set click spot · F3 slower · F4 faster",
+        tk.Label(self.root, text="F1 start/stop · F2 set click spot · F3/F4 longer/shorter pause",
                  bg=self.BG, fg="#555", font=("Segoe UI", 8)).pack(side=tk.BOTTOM, pady=(0, 4))
 
     def _toggle_log(self):
@@ -365,6 +381,10 @@ class App:
         else:
             self.vars["match"].set(f"different ({self.match_px:,} px)")
             self.value_labels["match"].config(fg=self.WARN)
+        self.vars["hold"].set(fmt_ms(s["hold"]))
+        self.value_labels["hold"].config(
+            fg=self.WARN if s["hold"] < clicker.FRAME else self.FG)
+        self.vars["gap"].set(fmt_ms(s["gap"]))
         self.vars["speed"].set(fmt_speed(s))
         self.vars["cycles"].set(f"{self.spammer.cycles:,}")
         self.start_btn.config(text="Stop" if running else "Start")
@@ -582,10 +602,16 @@ class App:
     def toggle(self):
         self.stop() if self.spammer.running else self.start()
 
-    def change_speed(self, fn):
-        self.settings["gap"] = fn(self.settings["gap"])
+    def change_timer(self, key, fn):
+        """key "hold" (down -> up) or "gap" (up -> next down); fn steps it 5 ms."""
+        self.settings[key] = fn(self.settings[key])
         save_settings(self.settings)
-        self.set_status(f"Pause: {fmt_speed(self.settings)}")
+        s = self.settings
+        self.set_status(f"Hold {fmt_ms(s['hold'])}, pause {fmt_ms(s['gap'])} "
+                        f"({fmt_speed(s)}).")
+        if key == "hold" and s["hold"] < clicker.FRAME:
+            self.log("Note: a hold shorter than one game frame (~17 ms) can be missed "
+                     "by the game.")
         self._refresh()
 
     def quit(self):
@@ -612,9 +638,9 @@ class App:
                 elif vk == clicker.VK_F2:
                     self.record_click_spot()
                 elif vk == clicker.VK_F3:
-                    self.change_speed(clicker.slower)
+                    self.change_timer("gap", clicker.slower)
                 elif vk == clicker.VK_F4:
-                    self.change_speed(clicker.faster)
+                    self.change_timer("gap", clicker.faster)
         except queue.Empty:
             pass
         if self.running:

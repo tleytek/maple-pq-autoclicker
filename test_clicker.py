@@ -48,9 +48,19 @@ def test_speed_steps_are_clamped():
     for _ in range(50):
         g = c.faster(g)
     assert g == c.MIN_GAP
-    for _ in range(50):
+    for _ in range(500):
         g = c.slower(g)
     assert g == c.MAX_GAP
+    assert c.faster(0.03) == 0.025 and c.slower(0.03) == 0.035  # 5 ms steps
+    assert c.faster(0.2532) == 0.25 and c.slower(0.2532) == 0.255  # snaps to 5 ms
+    h = 0.035
+    assert c.shorter_hold(h) == 0.03 and c.longer_hold(h) == 0.04
+    for _ in range(50):
+        h = c.shorter_hold(h)
+    assert h == c.MIN_HOLD
+    for _ in range(500):
+        h = c.longer_hold(h)
+    assert h == c.MAX_HOLD
 
 
 CLICK_UP = [("left", "up")]
@@ -93,6 +103,22 @@ def test_spammer_records_even_press_times():
     assert n >= 10 and abs(mean - 40) < 0.5, (n, mean)
     assert hi - lo < 2.0, (lo, hi)  # fixed schedule: no drift, no extra pauses
     assert c.timing_stats([]) == (0, None, None, None)
+
+
+def test_hold_and_pause_are_independent():
+    """Down->up is exactly `hold`, up->next down exactly `gap`."""
+    for hold, gap in ((0.06, 0.01), (0.01, 0.06)):
+        fake = FakeSend()
+        sp = c.Spammer(dict(clicker_settings, gap=gap, hold=hold), send_fn=fake)
+        sp.start()
+        time.sleep(0.45)
+        sp.stop()
+        t = [x for x, _ in fake.log][:-1]  # drop the final safety release
+        t = t[:len(t) // 2 * 2]
+        holds = [(t[i + 1] - t[i]) * 1000 for i in range(0, len(t), 2)]
+        pauses = [(t[i + 2] - t[i + 1]) * 1000 for i in range(0, len(t) - 2, 2)]
+        assert all(abs(h - hold * 1000) < 2 for h in holds), (hold, holds)
+        assert all(abs(p - gap * 1000) < 2 for p in pauses), (gap, pauses)
 
 
 def test_spammer_picks_up_live_changes():

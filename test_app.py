@@ -382,17 +382,26 @@ def test_refuses_when_the_game_blocks_input():
         app.quit()
 
 
-def test_pause_row_and_sequence_rate():
+def test_hold_and_pause_rows_change_by_5_ms_and_save():
     s = dict(clicker.DEFAULT_SETTINGS, gap=0.05)
-    assert abs(main.click_seconds(s) - 0.085) < 1e-9  # 35 ms click + 50 ms pause
-    assert main.fmt_speed(s) == "50 ms  (11.8 clicks / sec)"
-    app = make_app({"gap": 0.05, "hold": 0.015})
+    assert abs(main.click_seconds(s) - 0.085) < 1e-9  # 35 ms hold + 50 ms pause
+    assert main.fmt_speed(s) == "11.8 clicks / sec"
+    app = make_app({"gap": 0.05, "hold": 0.015})  # old "hold" entry: ignored
     try:
         assert app.settings["hold"] == 0.035
-        assert app.vars["speed"].get() == "50 ms  (11.8 clicks / sec)"
-        app.change_speed(clicker.faster)
-        assert app.vars["speed"].get().startswith("33 ms"), app.vars["speed"].get()
-        assert "Pause: 33 ms" in app.status.get()
+        assert app.vars["hold"].get() == "35 ms" and app.vars["gap"].get() == "50 ms"
+        app.change_timer("gap", clicker.faster)
+        app.change_timer("hold", clicker.longer_hold)
+        assert app.vars["gap"].get() == "45 ms" and app.vars["hold"].get() == "40 ms"
+        assert "Hold 40 ms, pause 45 ms" in app.status.get(), app.status.get()
+        assert saved()["click_hold"] == 0.04 and "hold" not in saved()
+        app = reopen(app)  # both survive a restart
+        assert app.settings["hold"] == 0.04 and app.settings["gap"] == 0.045
+        for _ in range(5):
+            app.change_timer("hold", clicker.shorter_hold)
+        assert app.vars["hold"].get() == "15 ms"
+        assert str(app.value_labels["hold"].cget("fg")) == app.WARN  # under a frame
+        assert "can be missed" in app.log_text.get("1.0", "end")
     finally:
         app.quit()
 

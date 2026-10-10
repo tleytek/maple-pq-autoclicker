@@ -4,6 +4,7 @@ Spams a left click at a saved screen position: click, pause, click, ...
 """
 import ctypes
 import ctypes.wintypes as wt
+import math
 import threading
 import time
 from collections import deque
@@ -15,7 +16,10 @@ HOTKEYS = {VK_F1: "F1", VK_F2: "F2", VK_F3: "F3", VK_F4: "F4"}
 
 MIN_GAP = 0.01   # shortest pause allowed between clicks: 10 ms
 MAX_GAP = 2.0
-SPEED_STEP = 1.5  # F3 / F4 change the interval by this factor
+MIN_HOLD = 0.005  # button down -> up: 5 ms ...
+MAX_HOLD = 1.0    # ... to 1 s
+FRAME = 1 / 60    # a hold shorter than one game frame may be missed
+STEP = 0.005  # Shorter / Longer (and F3 / F4 for the pause) change by 5 ms
 DEFAULT_SETTINGS = {
     "click": None,         # [x, y] screen pixel to left-click
     "gap": 0.03,           # pause after each click (35 + 30 ms = ~15 clicks/sec)
@@ -173,12 +177,28 @@ def wait_until(deadline, stop):
             time.sleep(min(left - 0.0015, 0.01))
 
 
+def _step(value, direction, lo, hi):
+    """Next multiple of 5 ms below (direction -1) or above (+1) the value,
+    kept within lo..hi. E.g. 30 -> 25 / 35, 253 -> 250 / 255."""
+    k = value / STEP
+    steps = math.floor(k - 1e-6) if direction < 0 else math.ceil(k + 1e-6)
+    return round(min(max(steps * STEP, lo), hi), 3)
+
+
 def faster(gap):
-    return round(max(gap / SPEED_STEP, MIN_GAP), 4)
+    return _step(gap, -1, MIN_GAP, MAX_GAP)
 
 
 def slower(gap):
-    return round(min(gap * SPEED_STEP, MAX_GAP), 4)
+    return _step(gap, +1, MIN_GAP, MAX_GAP)
+
+
+def shorter_hold(hold):
+    return _step(hold, -1, MIN_HOLD, MAX_HOLD)
+
+
+def longer_hold(hold):
+    return _step(hold, +1, MIN_HOLD, MAX_HOLD)
 
 
 # --------------------------------------------------------------------------- #
