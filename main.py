@@ -1,12 +1,14 @@
 """Maple PQ Autoclicker.
 
-Spams a left click on a saved spot: click, pause, repeat.
+Spams a left click on a saved spot (click, pause, repeat) and, optionally,
+your interact key in a separate loop alongside it.
 
 1. F2: saves the mouse position as the spot to left-click.
-2. Select Region: the part of the screen to watch.
-3. Take Snapshot: saves what that region must look like. Clicking only
+2. Record Interact (optional): press the key you use to interact in game.
+3. Select Region: the part of the screen to watch.
+4. Take Snapshot: saves what that region must look like. Clicking only
    starts while the region matches it, and stops as soon as it doesn't.
-4. F1: start / stop.   F3 longer pause, F4 shorter pause.
+5. F1: start / stop.   F3/F4 pause +/-, F5/F6 hold +/-.
 """
 import json
 import os
@@ -61,7 +63,11 @@ def load_settings(path=None):
             data = json.load(f)
     except (OSError, ValueError):
         return settings
-    if isinstance(data, dict):  # (an old "interact_vk" entry is simply ignored)
+    if isinstance(data, dict):
+        vk = data.get("interact_vk")
+        if (isinstance(vk, int) and 0 < vk < 256 and vk not in clicker.HOTKEYS
+                and vk != clicker.VK_ESCAPE):
+            settings["interact_vk"] = vk
         pos = data.get("click")
         if (isinstance(pos, list) and len(pos) == 2
                 and all(isinstance(v, int) for v in pos)):
@@ -204,7 +210,8 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
         self.settings = load_settings()
-        self.spammer = clicker.Spammer(self.settings)
+        self.spammer = clicker.Autoclicker(self.settings)  # click loop (+ key loop)
+        self.capturing_key = False
         self.events = queue.Queue()  # hotkey thread -> UI thread
         self.running = True
         self.capturer = screen.Capturer()  # UI-thread capture for the preview
@@ -251,7 +258,8 @@ class App:
             ("hold", "Hold (down → up)"),
             ("gap", "Pause (up → down)"),
             ("speed", "Rate"),
-            ("cycles", "Clicks"),
+            ("interact", "Interact key"),
+            ("cycles", "Presses"),
         ]
         for i, (key, label) in enumerate(rows):
             tk.Label(stats, text=label, bg=self.BG, fg=self.DIM,
@@ -269,6 +277,10 @@ class App:
         btns.pack(fill=tk.X, pady=(8, 4), **pad)
         self.start_btn = ttk.Button(btns, text="Start", command=self.toggle)
         self.start_btn.pack(side=tk.LEFT)
+        self.record_btn = ttk.Button(btns, text="Record Interact", command=self.record_interact)
+        self.record_btn.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(btns, text="Clear Interact", command=self.clear_interact
+                   ).pack(side=tk.LEFT, padx=4)
 
         region_btns = tk.Frame(self.root, bg=self.BG)
         region_btns.pack(fill=tk.X, pady=(0, 4), **pad)
@@ -387,7 +399,18 @@ class App:
             fg=self.WARN if s["hold"] < clicker.FRAME else self.FG)
         self.vars["gap"].set(fmt_ms(s["gap"]))
         self.vars["speed"].set(fmt_speed(s))
-        self.vars["cycles"].set(f"{self.spammer.cycles:,}")
+        if self.capturing_key:
+            self.vars["interact"].set("press a key…")
+        elif s["interact_vk"]:
+            self.vars["interact"].set(clicker.key_name(s["interact_vk"]))
+        else:
+            self.vars["interact"].set("off (click only)")
+        self.value_labels["interact"].config(
+            fg=self.WARN if self.capturing_key else self.FG if s["interact_vk"] else self.DIM)
+        presses = f"{self.spammer.cycles:,} clicks"
+        if self.spammer.key_cycles:
+            presses += f" · {self.spammer.key_cycles:,} keys"
+        self.vars["cycles"].set(presses)
         self.start_btn.config(text="Stop" if running else "Start")
 
     # ---- actions -------------------------------------------------------- #
@@ -400,6 +423,41 @@ class App:
         elif not self.snapshot:
             out.append("click Take Snapshot")
         return out
+
+    def record_interact(self):
+        if self.capturing_key:
+            return
+        self.stop()
+        self.capturing_key = True
+        self.record_btn.config(text="Press a key…")
+        self.root.focus_force()
+        self.root.bind("<KeyPress>", self._key_captured)
+        self.set_status("Press the key you use to interact in game (Esc cancels).")
+        self._refresh()
+
+    def _key_captured(self, event):
+        vk = event.keycode  # on Windows Tk's keycode is the virtual-key code
+        if vk in clicker.HOTKEYS:
+            self.set_status(f"{clicker.HOTKEYS[vk]} is a hotkey here — press a different key.")
+            return
+        self.root.unbind("<KeyPress>")
+        self.capturing_key = False
+        self.record_btn.config(text="Record Interact")
+        if vk == clicker.VK_ESCAPE:
+            self.set_status("Recording the interact key cancelled.")
+        else:
+            self.settings["interact_vk"] = vk
+            save_settings(self.settings)
+            self.set_status(f"Interact key set to {clicker.key_name(vk)}. It's spammed "
+                            "alongside the clicks, with the same hold and pause.")
+        self._refresh()
+
+    def clear_interact(self):
+        self.stop()
+        self.settings["interact_vk"] = None
+        save_settings(self.settings)
+        self.set_status("Interact key cleared: only the left click is spammed.")
+        self._refresh()
 
     def record_click_spot(self):
         x, y = clicker.get_pos()
@@ -522,6 +580,9 @@ class App:
     def start(self):
         if self.spammer.running:
             return
+        if self.capturing_key:
+            self.set_status("Finish recording the interact key first.")
+            return
         missing = self._missing()
         if missing:
             self.set_status("Can't start: " + " and ".join(missing) + ".")
@@ -555,7 +616,9 @@ class App:
         self.spammer.start()  # before the watcher, so an instant change still stops it
         self.watcher = screen.Watcher(region, self.snapshot, self._on_region_change).start()
         s = self.settings
-        self.set_status(f"Running: left click at ({s['click'][0]}, {s['click'][1]}), "
+        key = (f" + {clicker.key_name(s['interact_vk'])} key" if s["interact_vk"] else "")
+        self.set_status(f"Running: left click at ({s['click'][0]}, {s['click'][1]}){key}, "
+                        f"hold {fmt_ms(s['hold'])}, "
                         f"pause {s['gap'] * 1000:.0f} ms. Stops when the region stops "
                         "matching the snapshot. F1 to stop.")
         if self._spot_in_region():
@@ -574,9 +637,15 @@ class App:
             return
         self._stop_watcher()
         self.spammer.stop()
-        self.set_status(f"Stopped after {self.spammer.cycles:,} clicks.")
+        self.set_status(f"Stopped after {self._presses_text()}.")
         self._log_timing()
         self._refresh()
+
+    def _presses_text(self):
+        text = f"{self.spammer.cycles:,} clicks"
+        if self.spammer.key_cycles:
+            text += f" and {self.spammer.key_cycles:,} key presses"
+        return text
 
     def _log_timing(self):
         n, mean, lo, hi = clicker.timing_stats(self.spammer.presses)
@@ -593,7 +662,7 @@ class App:
         else:
             self.stop_reason = "region changed"
             self.set_status(f"Stopped: the region no longer matches the snapshot ({info:,} pixels) "
-                            f"after {self.spammer.cycles:,} clicks.")
+                            f"after {self._presses_text()}.")
             self._update_preview(frame)
         if watcher:
             self.log(f"Checked the region {watcher.checks:,} times.")

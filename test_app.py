@@ -10,6 +10,7 @@ import os
 import tempfile
 import time
 import tkinter as tk
+import types
 
 import clicker
 import main
@@ -101,8 +102,8 @@ def wait_stopped(app, limit=1.0):
 def test_load_settings_rejects_bad_values():
     path = os.path.join(TMP, "bad.json")
     with open(path, "w") as f:
-        json.dump({"interact_vk": 0x20, "click": [1, "x"], "gap": 0.0001,
-                   "hold": "fast"}, f)  # old interact key setting is ignored
+        json.dump({"interact_vk": clicker.VK_F1, "click": [1, "x"], "gap": 0.0001,
+                   "hold": "fast"}, f)  # a hotkey can't be the interact key
     s = main.load_settings(path)
     assert s == clicker.DEFAULT_SETTINGS, s
     with open(path, "w") as f:
@@ -111,7 +112,7 @@ def test_load_settings_rejects_bad_values():
     with open(path, "w") as f:
         json.dump({"region": {"left": 1, "top": 2, "width": 3, "height": 50}}, f)
     assert "region" not in main.load_settings(path)  # too small
-    good = {"click": [5, 6], "gap": 0.03,
+    good = {"interact_vk": 0x20, "click": [5, 6], "gap": 0.03,
             "region": {"left": -100, "top": 2, "width": 300, "height": 50}}
     with open(path, "w") as f:
         json.dump(dict(good, hold=0.015), f)  # old saved hold is ignored
@@ -132,12 +133,71 @@ def test_fresh_start_asks_for_setup_and_refuses_to_run():
         status = app.status.get()
         for step in ("F2", "Select Region"):
             assert step in status, status
-        assert "Interact" not in status and "interact" not in app.vars
+        assert "Interact" not in status  # optional, so not asked for
+        assert app.vars["interact"].get() == "off (click only)"
         assert app.vars["region"].get() == "not set"
         assert app.vars["snapshot"].get() == "not taken"
         app.start()
         assert not app.spammer.running
         assert "Can't start" in app.status.get()
+    finally:
+        app.quit()
+
+
+def test_record_and_clear_interact_key():
+    app = make_app()
+    try:
+        app.record_interact()
+        assert app.capturing_key and app.vars["interact"].get() == "press a key…"
+        app._key_captured(types.SimpleNamespace(keycode=clicker.VK_F5))  # hotkey: refused
+        assert app.capturing_key and app.settings["interact_vk"] is None
+        app._key_captured(types.SimpleNamespace(keycode=0x20))
+        assert not app.capturing_key
+        assert app.settings["interact_vk"] == 0x20 and saved()["interact_vk"] == 0x20
+        assert app.vars["interact"].get() == "Space"
+        app.record_interact()  # Esc cancels without changing it
+        app._key_captured(types.SimpleNamespace(keycode=clicker.VK_ESCAPE))
+        assert app.settings["interact_vk"] == 0x20 and not app.capturing_key
+        app.clear_interact()
+        assert app.settings["interact_vk"] is None and saved()["interact_vk"] is None
+        assert app.vars["interact"].get() == "off (click only)"
+    finally:
+        app.quit()
+
+
+def test_interact_key_is_spammed_alongside_clicks_and_stops_with_them():
+    app, top, canvas = ready_app()
+    try:
+        app.settings["interact_vk"] = 0x20
+        app.start()
+        pump(app, 0.4)
+        assert app.spammer.running, app.status.get()
+        assert "Space key" in app.status.get(), app.status.get()
+        assert app.spammer.cycles >= 5 and app.spammer.key_cycles >= 5
+        assert "keys" in app.vars["cycles"].get(), app.vars["cycles"].get()
+        canvas.create_text(70, 20, text="Next", fill="white")  # region changes
+        top.update()
+        took = wait_stopped(app)
+        assert not app.spammer.running and took < 0.15, took
+        pump(app, 0.2)
+        tail = [b for _, b in app.fake.log[-2:]]
+        assert [("key", 0x20, "up")] in tail and [("left", "up")] in tail, tail
+        assert "key presses" in app.status.get(), app.status.get()
+        top.destroy()
+    finally:
+        app.quit()
+
+
+def test_recording_key_stops_spamming():
+    app, top, canvas = ready_app()
+    try:
+        app.start()
+        assert app.spammer.running
+        app.record_interact()
+        assert not app.spammer.running and app.capturing_key and app.watcher is None
+        app.start()
+        assert not app.spammer.running and "Finish recording" in app.status.get()
+        top.destroy()
     finally:
         app.quit()
 
