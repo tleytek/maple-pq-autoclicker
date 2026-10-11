@@ -7,6 +7,8 @@ screen shows what you expect.
 You set up:
 
 - **Click spot**: where on the screen to left-click.
+- **Interact key** (optional): spammed in its own loop alongside the clicks,
+  with the same hold and pause. Without one, it only clicks.
 - **Watch region + snapshot**: a part of the screen (e.g. the NPC's text)
   and a saved picture of what it should look like. Clicking only starts
   while the region matches the snapshot, and stops as soon as it doesn't
@@ -38,11 +40,13 @@ To build the exe yourself, run **`build.bat`**. It writes
 ## Usage
 
 1. Put the mouse where you want it to click and press **F2**.
-2. Click **Select Region** and drag a box around the text to watch.
-3. With the game on the screen where clicking should run, click
+2. Optional: click **Record Interact**, then press your interact key (Esc
+   cancels). **Clear Interact** turns it off again.
+3. Click **Select Region** and drag a box around the text to watch.
+4. With the game on the screen where clicking should run, click
    **Take Snapshot**. The **Snapshot** and **Now** previews show the saved
    picture and the live region; **Region now** says whether they match.
-4. Switch to the game and press **F1** to start. Press **F1** again to stop.
+5. Switch to the game and press **F1** to start. Press **F1** again to stop.
 
 If the region doesn't match the snapshot, F1 does nothing (the status line
 says how many pixels differ). After it stops on a change, it won't start
@@ -58,7 +62,7 @@ it runs.
 
 ### Why administrator?
 
-MapleStory runs as administrator, and Windows silently ignores clicks that
+MapleStory runs as administrator, and Windows silently ignores keys and clicks that
 normal programs send to an administrator program. So the app
 has to run as administrator too: the exe asks every time it opens, and
 `run.bat` starts it that way. If it's ever started without admin while an
@@ -68,6 +72,7 @@ nothing.
 | Control | Action |
 |---|---|
 | F2 | Set the click spot to where the mouse is now |
+| Record / Clear Interact | Set or remove the interact key (optional) |
 | Select Region | Pick the part of the screen to watch (drag a box; Esc cancels) |
 | Take Snapshot | Save what the region must look like for clicking to run |
 | F1 / Start | Start / stop |
@@ -116,7 +121,7 @@ python test_screen.py
 python test_app.py
 ```
 
-They don't click: input is sent to a fake. One test moves the
+They don't click or press keys: input is sent to a fake. One test moves the
 cursor (no clicks) to check it lands on the exact pixel, then puts it back.
 The screen tests open small windows and capture them, so run them on a
 visible desktop.
