@@ -39,7 +39,8 @@ To build the exe yourself, run **`build.bat`**. It writes
 
 ## Usage
 
-1. Put the mouse where you want it to click and press **F2**.
+1. Set the click spot: click **Record Click** and move the mouse onto the
+   spot within 3 seconds, or put the mouse on the spot and press **F2**.
 2. Optional: click **Record Interact**, then press your interact key (Esc
    cancels). **Clear Interact** turns it off again.
 3. Click **Select Region** and drag a box around the text to watch.
@@ -71,6 +72,7 @@ nothing.
 
 | Control | Action |
 |---|---|
+| Record Click | Save the mouse position as the click spot after 3 s (F2 saves it right away) |
 | F2 | Set the click spot to where the mouse is now |
 | Record / Clear Interact | Set or remove the interact key (optional) |
 | Select Region | Pick the part of the screen to watch (drag a box; Esc cancels) |

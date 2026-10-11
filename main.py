@@ -212,6 +212,7 @@ class App:
         self.settings = load_settings()
         self.spammer = clicker.Autoclicker(self.settings)  # click loop (+ key loop)
         self.capturing_key = False
+        self._countdown = None  # pending after() id while Record Click counts down
         self.events = queue.Queue()  # hotkey thread -> UI thread
         self.running = True
         self.capturer = screen.Capturer()  # UI-thread capture for the preview
@@ -284,6 +285,9 @@ class App:
 
         region_btns = tk.Frame(self.root, bg=self.BG)
         region_btns.pack(fill=tk.X, pady=(0, 4), **pad)
+        self.click_btn = ttk.Button(region_btns, text="Record Click",
+                                    command=self.record_click_countdown)
+        self.click_btn.pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(region_btns, text="Select Region", command=self.select_region
                    ).pack(side=tk.LEFT)
         ttk.Button(region_btns, text="Take Snapshot", command=self.take_snapshot
@@ -379,7 +383,7 @@ class App:
         self.value_labels["state"].config(
             fg=self.ACCENT if running else self.WARN if self.stop_reason else self.FG)
         self.vars["click"].set(f"({s['click'][0]}, {s['click'][1]})" if s["click"]
-                               else "not set — F2")
+                               else "not set — Record Click / F2")
         self.value_labels["click"].config(fg=self.FG if s["click"] else self.WARN)
         self.vars["region"].set(fmt_region(s["region"]) if s.get("region") else "not set")
         self.value_labels["region"].config(fg=self.FG if s.get("region") else self.WARN)
@@ -417,7 +421,7 @@ class App:
     def _missing(self):
         out = []
         if not self.settings["click"]:
-            out.append("put the mouse on the click spot and press F2")
+            out.append("click Record Click (or put the mouse on the spot and press F2)")
         if not self.settings.get("region"):
             out.append("click Select Region")
         elif not self.snapshot:
@@ -459,7 +463,35 @@ class App:
         self.set_status("Interact key cleared: only the left click is spammed.")
         self._refresh()
 
+    CLICK_COUNTDOWN = 3  # seconds to move the mouse onto the spot
+
+    def record_click_countdown(self):
+        """Record Click button: save the mouse position after a countdown
+        (F2 during it saves right away)."""
+        if self._countdown is not None:
+            return
+        self.stop()
+        self._countdown_tick(self.CLICK_COUNTDOWN)
+
+    def _countdown_tick(self, left):
+        if left <= 0:
+            self._countdown = None
+            self.click_btn.config(text="Record Click")
+            self.record_click_spot()
+            return
+        self.click_btn.config(text=f"Recording… {left}")
+        self.set_status(f"Move the mouse to the click spot: saving it in {left} s "
+                        "(or press F2 now).")
+        self._countdown = self.root.after(1000, self._countdown_tick, left - 1)
+
+    def _cancel_countdown(self):
+        if self._countdown is not None:
+            self.root.after_cancel(self._countdown)
+            self._countdown = None
+            self.click_btn.config(text="Record Click")
+
     def record_click_spot(self):
+        self._cancel_countdown()
         x, y = clicker.get_pos()
         self.settings["click"] = [x, y]
         save_settings(self.settings)
@@ -689,6 +721,7 @@ class App:
         self.hotkeys.stop()
         self._stop_watcher()
         self.spammer.stop()
+        self._cancel_countdown()
         for after_id in self._afters.values():
             self.root.after_cancel(after_id)
         self.capturer.close()

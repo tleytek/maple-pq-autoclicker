@@ -216,6 +216,32 @@ def test_f2_sets_click_spot():
         app.quit()
 
 
+def test_record_click_button_counts_down_then_saves():
+    app = make_app()
+    orig = clicker.get_pos
+    try:
+        app.CLICK_COUNTDOWN = 1
+        clicker.get_pos = lambda: (321, 654)
+        app.record_click_countdown()
+        assert app.click_btn.cget("text") == "Recording… 1"
+        assert "saving it in 1 s" in app.status.get()
+        assert app.settings["click"] is None  # not yet
+        pump(app, 1.3)
+        assert app.settings["click"] == [321, 654] and saved()["click"] == [321, 654]
+        assert app.click_btn.cget("text") == "Record Click"
+        # F2 during the countdown saves immediately and ends it
+        app.CLICK_COUNTDOWN = 3
+        clicker.get_pos = lambda: (7, 8)
+        app.record_click_countdown()
+        app.events.put(("key", clicker.VK_F2))
+        pump(app, 0.2)
+        assert app.settings["click"] == [7, 8] and app._countdown is None
+        assert app.click_btn.cget("text") == "Record Click"
+    finally:
+        clicker.get_pos = orig
+        app.quit()
+
+
 def test_speed_hotkeys_save():
     app = make_app()
     try:
