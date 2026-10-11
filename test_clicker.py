@@ -1,6 +1,6 @@
 """Tests for clicker.py. Run: python test_clicker.py
 
-Nothing here clicks: SendInput is replaced by a recorder.
+Nothing here clicks or presses keys: SendInput is replaced by a recorder.
 The cursor-accuracy test moves the real cursor (no click) and puts it back.
 """
 import random
@@ -13,7 +13,9 @@ clicker_settings = dict(c.DEFAULT_SETTINGS, click=[100, 200])
 
 
 def decode(inp):
-    assert inp.type == c.INPUT_MOUSE, "only mouse input is ever sent"
+    if inp.type == c.INPUT_KEYBOARD:
+        up = bool(inp.ki.dwFlags & c.KEYEVENTF_KEYUP)
+        return ("key", inp.ki.wVk, "up" if up else "down")
     f = inp.mi.dwFlags
     if f & c.MOVE:
         return ("move", inp.mi.dx, inp.mi.dy)
@@ -27,6 +29,23 @@ class FakeSend:
     def __call__(self, *inputs):
         self.log.append((time.perf_counter(), [decode(i) for i in inputs]))
         return len(inputs)
+
+
+def test_key_input_uses_scan_codes():
+    space = c.key_input(0x20, True)
+    assert space.type == c.INPUT_KEYBOARD
+    assert space.ki.wScan == 0x39, hex(space.ki.wScan)  # hardware scan code for Space
+    assert space.ki.dwFlags == c.KEYEVENTF_SCANCODE
+    up = c.key_input(0x20, False)
+    assert up.ki.dwFlags == c.KEYEVENTF_SCANCODE | c.KEYEVENTF_KEYUP
+    arrow = c.key_input(0x26, True)  # Up arrow is an extended key
+    assert arrow.ki.dwFlags & c.KEYEVENTF_EXTENDEDKEY
+
+
+def test_key_names():
+    assert c.key_name(0x20) == "Space", c.key_name(0x20)
+    assert c.key_name(0x5A) == "Z", c.key_name(0x5A)
+    assert c.key_name(None) == "—"
 
 
 def test_input_layout():
@@ -90,6 +109,60 @@ def test_spammer_clicks_then_pauses():
     # a click every hold + pause = 50 ms -> ~10 in 0.5 s
     assert 9 <= sp.cycles <= 11, sp.cycles
     assert batches[-1] == CLICK_UP  # always ends with the button released
+
+
+def split(fake):
+    """(times of click downs, times of key downs, last batches) from a FakeSend log."""
+    clicks = [t for t, b in fake.log if b[-1] == ("left", "down")]
+    keys = [t for t, b in fake.log if b == [("key", 0x20, "down")]]
+    return clicks, keys
+
+
+def test_autoclicker_without_key_only_clicks():
+    fake = FakeSend()
+    ac = c.Autoclicker(dict(clicker_settings, gap=0.03, hold=0.01), send_fn=fake)
+    ac.start()
+    time.sleep(0.3)
+    ac.stop()
+    assert not ac.running and ac.key_cycles == 0
+    assert all(b[0][0] != "key" for _, b in fake.log), fake.log[:3]
+    assert ac.cycles >= 6
+
+
+def test_autoclicker_spams_key_and_click_in_separate_loops():
+    fake = FakeSend()
+    s = dict(clicker_settings, interact_vk=0x20, gap=0.03, hold=0.01)
+    ac = c.Autoclicker(s, send_fn=fake)
+    ac.start()
+    time.sleep(0.5)
+    ac.stop()
+    assert not ac.running
+    clicks, keys = split(fake)
+    # each loop runs its own even rhythm of hold + pause = 40 ms
+    for times in (clicks, keys):
+        gaps = [(b - a) * 1000 for a, b in zip(times, times[1:])]
+        assert len(gaps) >= 10 and all(abs(g - 40) < 2 for g in gaps), gaps
+    assert abs(ac.cycles - ac.key_cycles) <= 1 and ac.key_cycles >= 10
+    # each key press is released after `hold`
+    ups = [t for t, b in fake.log if b == [("key", 0x20, "up")]]
+    assert all(abs((u - d) * 1000 - 10) < 2 for d, u in zip(keys, ups)), (keys[:3], ups[:3])
+    # stopping releases both the key and the button
+    tail = [b for _, b in fake.log[-2:]]
+    assert [("key", 0x20, "up")] in tail and [("left", "up")] in tail, tail
+
+
+def test_autoclicker_shared_stop_signal_halts_both():
+    fake = FakeSend()
+    ac = c.Autoclicker(dict(clicker_settings, interact_vk=0x20, gap=0.02, hold=0.01),
+                       send_fn=fake)
+    ac.start()
+    time.sleep(0.1)
+    ac.stop_event.set()  # what the region watcher does
+    time.sleep(0.05)
+    assert not ac.running
+    n = len(fake.log)
+    time.sleep(0.1)
+    assert len(fake.log) == n  # nothing more sent by either loop
 
 
 def test_spammer_records_even_press_times():

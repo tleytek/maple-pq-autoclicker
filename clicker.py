@@ -1,6 +1,7 @@
 """Input engine for maple-pq-autoclicker (pure ctypes, no UI).
 
-Spams a left click at a saved screen position: click, pause, click, ...
+Spams a left click at a saved screen position (click, pause, click, ...)
+and, optionally, the game's interact key in its own separate loop.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -13,6 +14,7 @@ user32 = ctypes.windll.user32
 
 VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6 = 0x70, 0x71, 0x72, 0x73, 0x74, 0x75
 HOTKEYS = {VK_F1: "F1", VK_F2: "F2", VK_F3: "F3", VK_F4: "F4", VK_F5: "F5", VK_F6: "F6"}
+VK_ESCAPE = 0x1B
 
 MIN_GAP = 0.01   # shortest pause allowed between clicks: 10 ms
 MAX_GAP = 2.0
@@ -21,6 +23,7 @@ MAX_HOLD = 1.0    # ... to 1 s
 FRAME = 1 / 60    # a hold shorter than one game frame may be missed
 STEP = 0.005  # Shorter / Longer (and F3 / F4 for the pause) change by 5 ms
 DEFAULT_SETTINGS = {
+    "interact_vk": None,   # virtual-key code of the interact key (None = click only)
     "click": None,         # [x, y] screen pixel to left-click
     "gap": 0.03,           # pause after each click (35 + 30 ms = ~15 clicks/sec)
     "hold": 0.035,         # seconds the button is held down per click: longer
@@ -28,7 +31,12 @@ DEFAULT_SETTINGS = {
                            # every click is seen; shorter ones were sometimes missed
 }
 
-INPUT_MOUSE = 0
+INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
+KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0008
+# Keys whose scan code needs the E0 (extended) prefix.
+EXTENDED_VKS = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,  # PgUp..Down arrow
+                0x2D, 0x2E, 0x5B, 0x5C, 0x5D, 0x6F, 0x90,       # Ins Del Win Apps / NumLk
+                0xA3, 0xA5}                                     # RCtrl RAlt
 MOVE, ABSOLUTE, VIRTUALDESK = 0x0001, 0x8000, 0x4000
 LEFT_DOWN, LEFT_UP = 0x0002, 0x0004
 
@@ -40,15 +48,23 @@ class MOUSEINPUT(ctypes.Structure):
                 ("dwFlags", wt.DWORD), ("time", wt.DWORD), ("dwExtraInfo", ULONG_PTR)]
 
 
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD),
+                ("time", wt.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+
 class INPUT(ctypes.Structure):
     class _U(ctypes.Union):
-        _fields_ = [("mi", MOUSEINPUT)]
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
     _anonymous_ = ("u",)
     _fields_ = [("type", wt.DWORD), ("u", _U)]
 
 
 user32.SendInput.argtypes = [wt.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
 user32.SendInput.restype = wt.UINT
+user32.MapVirtualKeyW.argtypes = [wt.UINT, wt.UINT]
+user32.MapVirtualKeyW.restype = wt.UINT
+user32.GetKeyNameTextW.argtypes = [wt.LONG, wt.LPWSTR, ctypes.c_int]
 user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 user32.GetAsyncKeyState.restype = ctypes.c_short
 
@@ -146,6 +162,28 @@ def to_abs(x, y, desktop=None):
     return min(max(nx, 0), 65535), min(max(ny, 0), 65535)
 
 
+def key_name(vk):
+    """Human-readable name for a virtual-key code, e.g. 'Space', 'Z'."""
+    if vk is None:
+        return "—"
+    scan = user32.MapVirtualKeyW(vk, 0)
+    lparam = (scan << 16) | ((1 << 24) if vk in EXTENDED_VKS else 0)
+    buf = ctypes.create_unicode_buffer(64)
+    if scan and user32.GetKeyNameTextW(lparam, buf, 64):
+        return buf.value.title() if len(buf.value) > 1 else buf.value.upper()
+    return f"key 0x{vk:02X}"
+
+
+def key_input(vk, down):
+    """Keyboard INPUT sent as a hardware scan code (games often ignore VK-only input)."""
+    flags = KEYEVENTF_SCANCODE | (0 if down else KEYEVENTF_KEYUP)
+    if vk in EXTENDED_VKS:
+        flags |= KEYEVENTF_EXTENDEDKEY
+    inp = INPUT(type=INPUT_KEYBOARD)
+    inp.ki = KEYBDINPUT(vk, user32.MapVirtualKeyW(vk, 0), flags, 0, 0)
+    return inp
+
+
 def move_input(x, y):
     nx, ny = to_abs(x, y)
     inp = INPUT(type=INPUT_MOUSE)
@@ -230,15 +268,18 @@ def timing_stats(press_times):
 
 
 class Spammer:
-    """Background thread: left-clicks the saved spot, pauses `gap` seconds,
-    and repeats until stopped. Presses follow a fixed schedule (every
-    hold + gap, start to start) so the rhythm stays even. Reads `settings`
-    every click, so pause / position changes apply while it runs."""
+    """Background thread: presses one input (kind "click": left click on the
+    saved spot; kind "key": the interact key), holds it `hold`, releases,
+    pauses `gap`, and repeats until stopped. Presses follow a fixed schedule
+    (every hold + gap, start to start) so the rhythm stays even. Reads
+    `settings` every press, so timer / position changes apply while it runs."""
 
-    def __init__(self, settings, send_fn=None):
+    def __init__(self, settings, send_fn=None, kind="click", stop_event=None):
         self.settings = settings
         self.send = send_fn or send
-        self.stop_event = threading.Event()
+        self.kind = kind
+        self.vk = settings.get("interact_vk")
+        self.stop_event = stop_event or threading.Event()
         self.thread = None
         self.cycles = 0
         self.presses = deque(maxlen=500)  # perf_counter time of each press
@@ -247,10 +288,12 @@ class Spammer:
     def running(self):
         return self.thread is not None and self.thread.is_alive()
 
-    def start(self):
+    def start(self, clear=True):
         if self.running:
             return
-        self.stop_event.clear()
+        if clear:
+            self.stop_event.clear()
+        self.vk = self.settings.get("interact_vk")  # fixed for this run
         self.cycles = 0
         self.presses.clear()
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -261,18 +304,27 @@ class Spammer:
         if self.thread:
             self.thread.join(1)
 
+    def _press(self, s):
+        if self.kind == "key":
+            self.send(key_input(self.vk, True))
+        else:
+            x, y = s["click"]
+            self.send(move_input(x, y), button_input(True))  # move + press, atomic
+
+    def _release(self):
+        self.send(key_input(self.vk, False) if self.kind == "key" else button_input(False))
+
     def _run(self):
         boost_current_thread()
         nxt = time.perf_counter()
         try:
             while not self.stop_event.is_set():
                 s = self.settings
-                x, y = s["click"]
-                self.send(move_input(x, y), button_input(True))  # move + press, atomic
+                self._press(s)
                 self.presses.append(time.perf_counter())
                 if not wait_until(nxt + s["hold"], self.stop_event):
                     break
-                self.send(button_input(False))
+                self._release()
                 self.cycles += 1
                 # next press is a fixed period after this one's scheduled
                 # time; if we fell behind, carry on from now (no burst)
@@ -280,7 +332,54 @@ class Spammer:
                 if not wait_until(nxt, self.stop_event):
                     break
         finally:
-            self.send(button_input(False))  # never leave the button held down
+            self._release()  # never leave the button / key held down
+
+
+class Autoclicker:
+    """The left-click loop plus, when an interact key is set, a separate
+    interact-key loop running alongside it. Both use the same Hold / Pause
+    timers and share one stop signal, so a single stop (F1, or the watched
+    region changing) halts both at once."""
+
+    def __init__(self, settings, send_fn=None):
+        self.settings = settings
+        self.send = send_fn or send
+        self.stop_event = threading.Event()
+        self.click = Spammer(settings, kind="click", stop_event=self.stop_event)
+        self.key = Spammer(settings, kind="key", stop_event=self.stop_event)
+        self.loops = []
+
+    @property
+    def running(self):
+        return any(sp.running for sp in self.loops)
+
+    @property
+    def cycles(self):  # clicks
+        return self.click.cycles
+
+    @property
+    def key_cycles(self):
+        return self.key.cycles if self.key in self.loops else 0
+
+    @property
+    def presses(self):  # click times, for timing_stats
+        return self.click.presses
+
+    def start(self):
+        if self.running:
+            return
+        self.stop_event.clear()
+        self.loops = [self.click]
+        if self.settings.get("interact_vk"):
+            self.loops.append(self.key)
+        for sp in self.loops:
+            sp.send = self.send
+            sp.start(clear=False)  # don't undo a stop that arrives mid-start
+
+    def stop(self):
+        self.stop_event.set()
+        for sp in self.loops:
+            sp.stop()
 
 
 class HotkeyPoller:
